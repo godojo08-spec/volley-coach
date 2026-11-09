@@ -43,6 +43,7 @@ function App() {
   const [nomNouvelleEquipe, setNomNouvelleEquipe] = useState('');
   const [selectedStructureIdForNewTeam, setSelectedStructureIdForNewTeam] = useState('');
 
+  // Modales d'Onboarding et Stats
   const [showOnboardingModal, setShowOnboardingModal] = useState(false); 
   const [onboardingMembreId, setOnboardingMembreId] = useState(''); 
   const [onboardingStats, setOnboardingStats] = useState({ poste1: 'Réceptionneur-Attaquant (R4)', poste2: 'Polyvalent', attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 });
@@ -67,6 +68,13 @@ function App() {
   const [algoMode, setAlgoMode] = useState(null); 
   const [poolOfPlayers, setPoolOfPlayers] = useState([]);
   const [algoConfig, setAlgoConfig] = useState({ numTeams: 2, playersPerTeam: 6, lockedRoles: {} });
+
+  // Les 6 attributs pour les sliders de notation
+  const statsFields = [
+    { key: 'attaque', label: 'Attaque ⚔️' }, { key: 'bloc', label: 'Bloc 🧱' },
+    { key: 'defense', label: 'Défense 🛡️' }, { key: 'reception', label: 'Réception 👐' },
+    { key: 'passe', label: 'Passe 🎯' }, { key: 'service', label: 'Service ☄️' },
+  ];
 
   // ==========================================
   // INITIALISATION
@@ -140,7 +148,6 @@ function App() {
          snapP.docs.forEach(docP => {
             const pData = docP.data();
             if (pData.utilisateurId === user.uid) myPres[ev.id] = pData.statut;
-            
             if (pData.statut === 'present') {
                 globalPres[ev.id].present++;
                 globalPres[ev.id].joueursPresents.push(pData.utilisateurId);
@@ -183,35 +190,6 @@ function App() {
     } catch(err) { console.error(err) }
   };
 
-  const handleGenerateFromEvent = async (event) => {
-    const presentIds = presencesGlobales[event.id]?.joueursPresents || [];
-    if (presentIds.length === 0) return alert('Aucun joueur présent pour générer une équipe.');
-    try {
-      let allPlayers = [];
-      for (const tId of (event.equipeIds || [])) {
-        const qMembres = query(collection(db, 'membres'), where('cibleId', '==', tId), where('type', '==', 'equipe'));
-        const snap = await getDocs(qMembres);
-        for (const d of snap.docs) {
-          const lien = d.data();
-          if (lien.isJoueur && presentIds.includes(lien.utilisateurId)) {
-            if (!allPlayers.find(p => p.id === lien.utilisateurId)) {
-                const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId));
-                if (userSnap.exists()) {
-                  allPlayers.push({
-                    id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '',
-                    photoURL: userSnap.data().photoURL || '',
-                    posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent',
-                    stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }
-                  });
-                }
-            }
-          }
-        }
-      }
-      setPoolOfPlayers(allPlayers); setSelectedTeamsForAlgo(event.equipeIds || []); setAlgoStep(2); setActiveTab('generateur');
-    } catch (err) { console.error(err); }
-  };
-
   // ==========================================
   // FONCTIONS DE CRÉATION UNIFIÉES
   // ==========================================
@@ -222,11 +200,7 @@ function App() {
       await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: structRef.id, type: 'structure', isCoach: true, isJoueur: false }); 
       setMessageCreation('✅ Structure créée !'); 
       setTimeout(() => { 
-        setMessageCreation(''); 
-        setNomStructure('');
-        setShowCreateModal(false);
-        setCurrentView('main');
-        fetchMesDonnees(user.uid); 
+        setMessageCreation(''); setNomStructure(''); setShowCreateModal(false); setCurrentView('main'); fetchMesDonnees(user.uid); 
       }, 1500); 
     } catch (err) { setMessageCreation("❌ Erreur lors de la création."); } 
   };
@@ -237,21 +211,12 @@ function App() {
     try { 
       const struct = mesStructures.find(s => s.id === selectedStructureIdForNewTeam);
       const eqRef = await addDoc(collection(db, 'equipes'), { nom: nomNouvelleEquipe, structureId: struct.id, nomStructure: struct.nom, createurId: user.uid, dateCreation: new Date() }); 
-      
       // Le créateur de l'équipe est toujours et d'office Coach (isJoueur: false)
       await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: eqRef.id, type: 'equipe', isCoach: true, isJoueur: false }); 
-      
       setMessageCreation('✅ Équipe créée !'); 
       setTimeout(() => { 
-        setMessageCreation('');
-        setNomNouvelleEquipe('');
-        setShowCreateModal(false);
-        fetchMesDonnees(user.uid); 
-        
-        // Rafraîchit l'affichage si on est déjà dans la structure concernée
-        if (currentView === 'detail_structure' && selectedStructure?.id === struct.id) {
-          handleOpenStructure(struct);
-        }
+        setMessageCreation(''); setNomNouvelleEquipe(''); setShowCreateModal(false); fetchMesDonnees(user.uid); 
+        if (currentView === 'detail_structure' && selectedStructure?.id === struct.id) handleOpenStructure(struct);
       }, 1500); 
     } catch (err) { console.error(err); } 
   };
@@ -296,6 +261,8 @@ function App() {
       if (!eqSnap.exists()) { setMessageRejoindre("❌ Code invalide."); return; } 
       const newMembreRef = await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: codeInvitation, type: 'equipe', isCoach: false, isJoueur: true }); 
       setOnboardingMembreId(newMembreRef.id); 
+      // Réinitialiser les stats pour le nouvel onboarding
+      setOnboardingStats({ poste1: poste || 'Polyvalent', poste2: 'Polyvalent', attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 });
       setShowOnboardingModal(true); 
       setCodeInvitation(''); 
     } catch (err) { setMessageRejoindre("❌ Erreur."); } 
@@ -304,7 +271,10 @@ function App() {
   const handleSaveOnboarding = async (e) => { 
     e.preventDefault(); 
     try { 
-      await setDoc(doc(db, 'membres', onboardingMembreId), { isJoueur: true, poste1: onboardingStats.poste1, poste2: onboardingStats.poste2, stats: { attaque: onboardingStats.attaque, reception: onboardingStats.reception, passe: onboardingStats.passe, bloc: onboardingStats.bloc, defense: onboardingStats.defense, service: onboardingStats.service } }, { merge: true }); 
+      await setDoc(doc(db, 'membres', onboardingMembreId), { 
+        isJoueur: true, poste1: onboardingStats.poste1, poste2: onboardingStats.poste2, 
+        stats: { attaque: onboardingStats.attaque, reception: onboardingStats.reception, passe: onboardingStats.passe, bloc: onboardingStats.bloc, defense: onboardingStats.defense, service: onboardingStats.service } 
+      }, { merge: true }); 
       await setDoc(doc(db, 'utilisateurs', user.uid), { email: user.email, nom: nom || '', prenom: prenom || '', poste: onboardingStats.poste1 }, { merge: true }); 
       setPoste(onboardingStats.poste1); 
       setShowOnboardingModal(false); 
@@ -313,11 +283,7 @@ function App() {
   };
 
   const handlePromote = async (membre, mode) => { 
-    try { 
-      await updateDoc(doc(db, 'membres', membre.membreDocId), { isCoach: true, isJoueur: mode === 'Coach + Joueur' }); 
-      setOpenMenuId(null); 
-      handleOpenEquipe(selectedEquipe); 
-    } catch (err) {} 
+    try { await updateDoc(doc(db, 'membres', membre.membreDocId), { isCoach: true, isJoueur: mode === 'Coach + Joueur' }); setOpenMenuId(null); handleOpenEquipe(selectedEquipe); } catch (err) {} 
   };
 
   const handleRemove = async (membre) => { 
@@ -328,8 +294,9 @@ function App() {
 
   const handleOpenCoachStats = (membre) => { 
     setEditingMembre(membre); 
+    // On charge les stats modifiées par le coach, sinon celles du joueur, sinon tout à 5
     const baseStats = membre.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }; 
-    setCoachStats({ posteEquipe: membre.posteEquipe || membre.poste1 || 'Polyvalent', ...baseStats }); 
+    setCoachStats({ posteEquipe: membre.coachPoste || membre.posteEquipe || 'Polyvalent', ...baseStats }); 
     setOpenMenuId(null); 
     setShowCoachStatsModal(true); 
   };
@@ -347,13 +314,81 @@ function App() {
   };
 
   // ==========================================
-  // GÉNÉRATEUR ET PROFIL
+  // GÉNÉRATEUR (CORRIGÉ)
   // ==========================================
-  const toggleTeamSelection = (equipeId) => { setSelectedTeamsForAlgo(prev => prev.includes(equipeId) ? prev.filter(id => id !== equipeId) : [...prev, equipeId] ); };
-  const handleSelectModeAndConfigure = async (mode) => { setAlgoMode(mode); try { let allPlayers = []; for (const teamId of selectedTeamsForAlgo) { const qMembres = query(collection(db, 'membres'), where('cibleId', '==', teamId), where('type', 'equipe')); const snap = await getDocs(qMembres); for (const d of snap.docs) { const lien = d.data(); if (lien.isJoueur) { const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId)); if (userSnap.exists() && !allPlayers.find(p => p.id === userSnap.id)) { allPlayers.push({ id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '', photoURL: userSnap.data().photoURL || '', posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent', stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 } }); } } } } if (allPlayers.length === 0) allPlayers = [...mockPlayers]; setPoolOfPlayers(allPlayers); setAlgoStep(3); } catch (err) { console.error(err); } };
+  const toggleTeamSelection = (equipeId) => { 
+    setSelectedTeamsForAlgo(prev => prev.includes(equipeId) ? prev.filter(id => id !== equipeId) : [...prev, equipeId] ); 
+  };
+
+  // Étape 1 -> Étape 2 (On charge les joueurs une seule fois)
+  const handleGoToStep2 = async () => {
+    try {
+      let allPlayers = [];
+      for (const teamId of selectedTeamsForAlgo) {
+        const qMembres = query(collection(db, 'membres'), where('cibleId', '==', teamId), where('type', '==', 'equipe'));
+        const snap = await getDocs(qMembres);
+        for (const d of snap.docs) {
+          const lien = d.data();
+          if (lien.isJoueur) {
+            const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId));
+            if (userSnap.exists() && !allPlayers.find(p => p.id === userSnap.id)) {
+              allPlayers.push({
+                id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '', photoURL: userSnap.data().photoURL || '',
+                posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent',
+                stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }
+              });
+            }
+          }
+        }
+      }
+      if (allPlayers.length === 0) allPlayers = [...mockPlayers];
+      setPoolOfPlayers(allPlayers);
+      setAlgoStep(2);
+    } catch (err) { console.error(err); }
+  };
+
+  // Depuis l'Agenda (On charge les présents et on va direct à l'étape 2)
+  const handleGenerateFromEvent = async (event) => {
+    const presentIds = presencesGlobales[event.id]?.joueursPresents || [];
+    if (presentIds.length === 0) return alert('Aucun joueur présent pour générer une équipe.');
+    try {
+      let allPlayers = [];
+      for (const tId of (event.equipeIds || [])) {
+        const qMembres = query(collection(db, 'membres'), where('cibleId', '==', tId), where('type', '==', 'equipe'));
+        const snap = await getDocs(qMembres);
+        for (const d of snap.docs) {
+          const lien = d.data();
+          if (lien.isJoueur && presentIds.includes(lien.utilisateurId)) {
+            if (!allPlayers.find(p => p.id === lien.utilisateurId)) {
+                const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId));
+                if (userSnap.exists()) {
+                  allPlayers.push({
+                    id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '', photoURL: userSnap.data().photoURL || '',
+                    posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent',
+                    stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }
+                  });
+                }
+            }
+          }
+        }
+      }
+      setPoolOfPlayers(allPlayers); setSelectedTeamsForAlgo(event.equipeIds || []); 
+      setAlgoStep(2); setActiveTab('generateur');
+    } catch (err) { console.error(err); }
+  };
+
+  // Étape 2 -> Étape 3 (On change juste le mode SANS recharger les joueurs)
+  const handleSelectModeAndConfigure = (mode) => { 
+    setAlgoMode(mode); 
+    setAlgoStep(3); 
+  };
+
+
+  // ==========================================
+  // PROFIL & AUTH
+  // ==========================================
   const handleSaveProfile = async (e) => { e.preventDefault(); try { await setDoc(doc(db, 'utilisateurs', user.uid), { nom, prenom, poste, email: user.email, photoURL: photoUrl }, { merge: true }); setMessageProfil('✅ Profil mis à jour !'); setIsEditingProfile(false); setTimeout(() => setMessageProfil(''), 3000); } catch (err) {} };
   const handlePhotoUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onloadend = () => setPhotoUrl(reader.result); reader.readAsDataURL(file); } };
-  
   const handleAuth = async (e) => { e.preventDefault(); setError(''); try { if (isLoginMode) { await signInWithEmailAndPassword(auth, email, password); } else { await createUserWithEmailAndPassword(auth, email, password); } } catch (err) { setError(err.message || "Erreur d'authentification."); } };
   const handleGoogle = async () => { setError(''); try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (err) { setError(err.message || "Erreur avec Google."); } };
   const handleLogout = () => signOut(auth);
@@ -397,7 +432,7 @@ function App() {
                 </div>
               )}
 
-              {/* BOUTON + FLOTTANT GLOBAL DANS L'ONGLET ACCUEIL */}
+              {/* BOUTON + FLOTTANT GLOBAL */}
               {currentView !== 'detail_equipe' && (
                 <button 
                   onClick={() => {
@@ -418,11 +453,12 @@ function App() {
             </div>
           )}
 
-          {/* ========================================== MODALES MANQUANTES (ONBOARDING & COACH STATS) ========================================== */}
+          {/* ========================================== MODALES COMPLÈTES (ONBOARDING & COACH STATS) ========================================== */}
           {showOnboardingModal && (
             <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Ton profil Joueur</h2>
+              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up overflow-y-auto max-h-[90vh]">
+                <h2 className="text-xl font-bold text-gray-800 mb-2">Ton profil Joueur</h2>
+                <p className="text-xs text-gray-500 mb-4">Évalue ton niveau pour aider le générateur d'équipes.</p>
                 <form onSubmit={handleSaveOnboarding} className="space-y-4">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Poste principal</label>
@@ -435,7 +471,19 @@ function App() {
                       <option value="Polyvalent">Polyvalent</option>
                     </select>
                   </div>
-                  <button type="submit" className="w-full bg-green-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-green-700">Rejoindre l'équipe</button>
+                  
+                  <div className="space-y-3 mt-4 border-t pt-4 border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Tes statistiques (1 à 10)</p>
+                    {statsFields.map(stat => (
+                      <div key={stat.key} className="flex items-center gap-3">
+                        <label className="w-24 text-sm font-medium text-gray-700">{stat.label}</label>
+                        <input type="range" min="1" max="10" value={onboardingStats[stat.key]} onChange={e => setOnboardingStats({...onboardingStats, [stat.key]: parseInt(e.target.value)})} className="flex-grow accent-indigo-600"/>
+                        <span className="w-6 text-sm font-bold text-indigo-700 text-right">{onboardingStats[stat.key]}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button type="submit" className="w-full bg-green-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-green-700 mt-4">Rejoindre l'équipe</button>
                 </form>
               </div>
             </div>
@@ -443,8 +491,9 @@ function App() {
 
           {showCoachStatsModal && editingMembre && (
             <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Stats de {editingMembre.prenom}</h2>
+              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up overflow-y-auto max-h-[90vh]">
+                <h2 className="text-xl font-bold text-gray-800 mb-2">Stats de {editingMembre.prenom}</h2>
+                <p className="text-xs text-gray-500 mb-4">Ces notes sont secrètes et prioritaires pour le générateur.</p>
                 <form onSubmit={handleSaveCoachStats} className="space-y-4">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Poste assigné (Coach)</label>
@@ -457,7 +506,19 @@ function App() {
                       <option value="Polyvalent">Polyvalent</option>
                     </select>
                   </div>
-                  <div className="flex gap-2 pt-2">
+                  
+                  <div className="space-y-3 mt-4 border-t pt-4 border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Évaluation du Coach (1 à 10)</p>
+                    {statsFields.map(stat => (
+                      <div key={stat.key} className="flex items-center gap-3">
+                        <label className="w-24 text-sm font-medium text-gray-700">{stat.label}</label>
+                        <input type="range" min="1" max="10" value={coachStats[stat.key]} onChange={e => setCoachStats({...coachStats, [stat.key]: parseInt(e.target.value)})} className="flex-grow accent-indigo-600"/>
+                        <span className="w-6 text-sm font-bold text-indigo-700 text-right">{coachStats[stat.key]}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-2 pt-4">
                     <button type="button" onClick={() => setShowCoachStatsModal(false)} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-lg">Annuler</button>
                     <button type="submit" className="flex-1 bg-indigo-600 text-white font-bold py-3 rounded-lg">Enregistrer</button>
                   </div>
@@ -626,6 +687,7 @@ function App() {
           {activeTab === 'generateur' && (
             <div className="animate-fade-in p-4 relative min-h-screen">
               <div className="flex items-center gap-3 mb-6"><div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Wand2 size={24} /></div><div><h1 className="text-2xl font-bold text-gray-800">Générateur</h1><p className="text-sm text-gray-500">Crée des équipes équilibrées</p></div></div>
+              
               {algoStep === 1 && (
                 <div className="animate-fade-in">
                   <h2 className="text-lg font-bold text-gray-800 mb-4">1. Quelles équipes s'entraînent ?</h2>
@@ -635,12 +697,13 @@ function App() {
                       return (<div key={eq.id} onClick={() => toggleTeamSelection(eq.id)} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${isSelected ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 bg-white'}`}><div><p className="text-xs text-gray-400 font-bold uppercase mb-1">{eq.nomStructure}</p><p className={`font-bold ${isSelected ? 'text-indigo-900' : 'text-gray-800'}`}>{eq.nom}</p></div><div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-gray-300 bg-white'}`}>{isSelected && <CheckCircle2 size={16} />}</div></div>)
                     })}
                   </div>
-                  {selectedTeamsForAlgo.length > 0 && (<button onClick={() => setAlgoStep(2)} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-md">Continuer</button>)}
+                  {selectedTeamsForAlgo.length > 0 && (<button onClick={handleGoToStep2} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-md">Continuer</button>)}
                 </div>
               )}
+
               {algoStep === 2 && (
                 <div className="animate-fade-in">
-                  <button onClick={() => setAlgoStep(1)} className="text-indigo-600 text-sm font-bold mb-4 flex items-center">← Modifier</button>
+                  <button onClick={() => setAlgoStep(1)} className="text-indigo-600 text-sm font-bold mb-4 flex items-center">← Modifier l'effectif</button>
                   <h2 className="text-lg font-bold text-gray-800 mb-4">2. Choisis un mode de génération</h2>
                   <div className="grid grid-cols-2 gap-4">
                     <button onClick={() => handleSelectModeAndConfigure('aléatoire')} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 text-left"><p className="text-2xl mb-2">🎲</p><h3 className="font-bold text-gray-800">Aléatoire</h3></button>
@@ -650,6 +713,7 @@ function App() {
                   </div>
                 </div>
               )}
+
               {algoStep === 3 && (
                 <div className="animate-fade-in">
                   <button onClick={() => setAlgoStep(2)} className="text-indigo-600 text-sm font-bold mb-4 flex items-center">← Retour</button>
@@ -658,11 +722,11 @@ function App() {
                     {algoMode !== 'match' ? (
                       <div className="space-y-4">
                         <div><label className="block text-gray-700 font-bold mb-2">Nombre d'équipes</label><input type="number" min="2" max="10" value={algoConfig.numTeams} onChange={(e) => setAlgoConfig({...algoConfig, numTeams: parseInt(e.target.value) || 2})} className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-50 text-lg font-bold" /></div>
-                        <div><label className="block text-gray-700 font-bold mb-2">Joueurs par terrain</label><select value={algoConfig.playersPerTeam} onChange={(e) => setAlgoConfig({...algoConfig, playersPerTeam: parseInt(e.target.value)})} className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-50 text-lg font-bold"><option value={4}>4</option><option value={5}>5</option><option value={6}>6</option></select></div>
+                        <div><label className="block text-gray-700 font-bold mb-2">Joueurs par terrain</label><select value={algoConfig.playersPerTeam} onChange={(e) => setAlgoConfig({...algoConfig, playersPerTeam: parseInt(e.target.value)})} className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-50 text-lg font-bold"><option value={4}>4 (Losange)</option><option value={5}>5 (Pentagone)</option><option value={6}>6 (Classique)</option></select></div>
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        <p className="text-sm text-gray-600 mb-4">Sélection des postes pour le 6v6 :</p>
+                        <p className="text-sm text-gray-600 mb-4">Sélection des postes pour le 6v6 (Mode Match) :</p>
                         <div className="max-h-64 overflow-y-auto pr-2 space-y-2 border-t border-b border-gray-100 py-2">
                           {poolOfPlayers.map(p => (
                             <div key={p.id} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-200">
@@ -683,6 +747,7 @@ function App() {
                   <button onClick={() => setAlgoStep(4)} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-md flex items-center justify-center gap-2"><Wand2 size={20} /> Lancer ({poolOfPlayers.length} joueurs)</button>
                 </div>
               )}
+
               {algoStep === 4 && (<div className="animate-fade-in p-2 sm:p-4 relative"><TeamGenerator mode={algoMode} players={poolOfPlayers} config={algoConfig} goBack={() => setAlgoStep(3)} /></div>)}
             </div>
           )}
