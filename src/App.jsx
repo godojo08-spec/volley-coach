@@ -30,13 +30,18 @@ function App() {
 
   const [selectedStructure, setSelectedStructure] = useState(null);
   const [equipesStructure, setEquipesStructure] = useState([]);
-  const [nomNouvelleEquipe, setNomNouvelleEquipe] = useState('');
-  const [isCreatingEquipe, setIsCreatingEquipe] = useState(false);
-  
   const [selectedEquipe, setSelectedEquipe] = useState(null);
   const [membresEquipe, setMembresEquipe] = useState([]);
   const [codeInvitation, setCodeInvitation] = useState('');
   const [messageRejoindre, setMessageRejoindre] = useState('');
+
+  // ==========================================
+  // ÉTATS DE CRÉATION UNIFIÉE (Structure / Équipe)
+  // ==========================================
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createType, setCreateType] = useState('structure'); 
+  const [nomNouvelleEquipe, setNomNouvelleEquipe] = useState('');
+  const [selectedStructureIdForNewTeam, setSelectedStructureIdForNewTeam] = useState('');
 
   const [showOnboardingModal, setShowOnboardingModal] = useState(false); 
   const [onboardingMembreId, setOnboardingMembreId] = useState(''); 
@@ -56,12 +61,16 @@ function App() {
   const [eventFormData, setEventFormData] = useState(defaultEventState);
   const [editingEventId, setEditingEventId] = useState(null);
 
+  // Générateur
   const [algoStep, setAlgoStep] = useState(1); 
   const [selectedTeamsForAlgo, setSelectedTeamsForAlgo] = useState([]); 
   const [algoMode, setAlgoMode] = useState(null); 
   const [poolOfPlayers, setPoolOfPlayers] = useState([]);
   const [algoConfig, setAlgoConfig] = useState({ numTeams: 2, playersPerTeam: 6, lockedRoles: {} });
 
+  // ==========================================
+  // INITIALISATION
+  // ==========================================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
@@ -144,31 +153,19 @@ function App() {
     } catch(e) { console.error("Erreur Agenda:", e) }
   };
 
-  const openCreateEventModal = () => {
-    setEventFormData(defaultEventState);
-    setEditingEventId(null);
-    setShowEventModal(true);
-  };
-
-  const openEditEventModal = (ev) => {
-    setEventFormData({ titre: ev.titre, date: ev.date, heure: ev.heure, type: ev.type, equipeIds: ev.equipeIds || [] });
-    setEditingEventId(ev.id);
-    setShowEventModal(true);
-  };
+  // ==========================================
+  // FONCTIONS AGENDA & PRÉSENCES
+  // ==========================================
+  const openCreateEventModal = () => { setEventFormData(defaultEventState); setEditingEventId(null); setShowEventModal(true); };
+  const openEditEventModal = (ev) => { setEventFormData({ titre: ev.titre, date: ev.date, heure: ev.heure, type: ev.type, equipeIds: ev.equipeIds || [] }); setEditingEventId(ev.id); setShowEventModal(true); };
 
   const handleSaveEvent = async (e) => {
     e.preventDefault();
     if (!eventFormData.equipeIds || eventFormData.equipeIds.length === 0) return alert("Veuillez sélectionner au moins une équipe.");
     try {
-       if (editingEventId) {
-          await updateDoc(doc(db, 'evenements', editingEventId), { ...eventFormData });
-       } else {
-          await addDoc(collection(db, 'evenements'), { ...eventFormData, createurId: user.uid, dateCreation: new Date().toISOString() });
-       }
-       setShowEventModal(false);
-       setEventFormData(defaultEventState);
-       setEditingEventId(null);
-       fetchAgenda();
+       if (editingEventId) await updateDoc(doc(db, 'evenements', editingEventId), { ...eventFormData });
+       else await addDoc(collection(db, 'evenements'), { ...eventFormData, createurId: user.uid, dateCreation: new Date().toISOString() });
+       setShowEventModal(false); setEventFormData(defaultEventState); setEditingEventId(null); fetchAgenda();
     } catch (err) { console.error(err) }
   };
 
@@ -211,50 +208,154 @@ function App() {
           }
         }
       }
-      setPoolOfPlayers(allPlayers);
-      setSelectedTeamsForAlgo(event.equipeIds || []);
-      setAlgoStep(2); 
-      setActiveTab('generateur');
+      setPoolOfPlayers(allPlayers); setSelectedTeamsForAlgo(event.equipeIds || []); setAlgoStep(2); setActiveTab('generateur');
     } catch (err) { console.error(err); }
   };
 
-  const handleCreateStructure = async (e) => { e.preventDefault(); try { const structRef = await addDoc(collection(db, 'structures'), { nom: nomStructure, createurId: user.uid, dateCreation: new Date() }); await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: structRef.id, type: 'structure', isCoach: true, isJoueur: false }); setMessageCreation('✅ Structure créée !'); setTimeout(() => { setMessageCreation(''); setCurrentView('main'); fetchMesDonnees(user.uid); }, 1500); } catch (err) { setMessageCreation("❌ Erreur."); } };
-  const handleCreateEquipe = async (e) => { e.preventDefault(); try { await addDoc(collection(db, 'equipes'), { nom: nomNouvelleEquipe, structureId: selectedStructure.id, nomStructure: selectedStructure.nom, createurId: user.uid, dateCreation: new Date() }); setNomNouvelleEquipe(''); setIsCreatingEquipe(false); handleOpenStructure(selectedStructure); fetchMesDonnees(user.uid); } catch (err) { console.error(err); } };
-  const handleOpenStructure = async (struct) => { setSelectedStructure(struct); setCurrentView('detail_structure'); setIsCreatingEquipe(false); try { const qEquipes = query(collection(db, 'equipes'), where('structureId', '==', struct.id)); const snap = await getDocs(qEquipes); setEquipesStructure(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))); } catch (err) { console.error(err); } };
-  const handleOpenEquipe = async (equipe) => { setSelectedEquipe(equipe); setCurrentView('detail_equipe'); setOpenMenuId(null); try { const qMembres = query(collection(db, 'membres'), where('cibleId', '==', equipe.id), where('type', '==', 'equipe')); const snap = await getDocs(qMembres); const membresTemp = []; for (const d of snap.docs) { const lien = d.data(); const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId)); const isCoach = lien.isCoach ?? (lien.role === 'coach'); const isJoueur = lien.isJoueur ?? (lien.role === 'joueur'); if (userSnap.exists()) { membresTemp.push({ id: userSnap.id, membreDocId: d.id, isCoach, isJoueur, email: userSnap.data().email, posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste, stats: lien.coachStats || lien.stats || null, ...userSnap.data() }); } else { membresTemp.push({ id: lien.utilisateurId, membreDocId: d.id, isCoach, isJoueur, prenom: 'Nouveau', nom: 'Joueur', posteEquipe: 'Inconnu' }); } } setMembresEquipe(membresTemp); } catch (err) { console.error(err); } };
-  const handleJoinEquipe = async (e) => { e.preventDefault(); try { const eqSnap = await getDoc(doc(db, 'equipes', codeInvitation)); if (!eqSnap.exists()) { setMessageRejoindre("❌ Code invalide."); return; } const newMembreRef = await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: codeInvitation, type: 'equipe', isCoach: false, isJoueur: true }); setOnboardingMembreId(newMembreRef.id); setShowOnboardingModal(true); setCodeInvitation(''); } catch (err) { setMessageRejoindre("❌ Erreur."); } };
-  const handleSaveOnboarding = async (e) => { e.preventDefault(); try { await setDoc(doc(db, 'membres', onboardingMembreId), { isJoueur: true, poste1: onboardingStats.poste1, poste2: onboardingStats.poste2, stats: { attaque: onboardingStats.attaque, reception: onboardingStats.reception, passe: onboardingStats.passe, bloc: onboardingStats.bloc, defense: onboardingStats.defense, service: onboardingStats.service } }, { merge: true }); await setDoc(doc(db, 'utilisateurs', user.uid), { email: user.email, nom: nom || '', prenom: prenom || '', poste: onboardingStats.poste1 }, { merge: true }); setPoste(onboardingStats.poste1); setShowOnboardingModal(false); fetchMesDonnees(user.uid); } catch (err) { console.error(err); } };
-  const handlePromote = async (membre, mode) => { try { await updateDoc(doc(db, 'membres', membre.membreDocId), { isCoach: true, isJoueur: mode === 'Coach + Joueur' }); setOpenMenuId(null); handleOpenEquipe(selectedEquipe); } catch (err) {} };
-  const handleRemove = async (membre) => { try { await deleteDoc(doc(db, 'membres', membre.membreDocId)); setOpenMenuId(null); handleOpenEquipe(selectedEquipe); } catch (err) {} };
+  // ==========================================
+  // FONCTIONS DE CRÉATION UNIFIÉES
+  // ==========================================
+  const handleCreateStructure = async (e) => { 
+    e.preventDefault(); 
+    try { 
+      const structRef = await addDoc(collection(db, 'structures'), { nom: nomStructure, createurId: user.uid, dateCreation: new Date() }); 
+      await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: structRef.id, type: 'structure', isCoach: true, isJoueur: false }); 
+      setMessageCreation('✅ Structure créée !'); 
+      setTimeout(() => { 
+        setMessageCreation(''); 
+        setNomStructure('');
+        setShowCreateModal(false);
+        setCurrentView('main');
+        fetchMesDonnees(user.uid); 
+      }, 1500); 
+    } catch (err) { setMessageCreation("❌ Erreur lors de la création."); } 
+  };
+
+  const handleCreateEquipe = async (e) => { 
+    e.preventDefault(); 
+    if (!selectedStructureIdForNewTeam) return alert("Veuillez sélectionner une structure parente.");
+    try { 
+      const struct = mesStructures.find(s => s.id === selectedStructureIdForNewTeam);
+      const eqRef = await addDoc(collection(db, 'equipes'), { nom: nomNouvelleEquipe, structureId: struct.id, nomStructure: struct.nom, createurId: user.uid, dateCreation: new Date() }); 
+      
+      // Le créateur de l'équipe est toujours et d'office Coach (isJoueur: false)
+      await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: eqRef.id, type: 'equipe', isCoach: true, isJoueur: false }); 
+      
+      setMessageCreation('✅ Équipe créée !'); 
+      setTimeout(() => { 
+        setMessageCreation('');
+        setNomNouvelleEquipe('');
+        setShowCreateModal(false);
+        fetchMesDonnees(user.uid); 
+        
+        // Rafraîchit l'affichage si on est déjà dans la structure concernée
+        if (currentView === 'detail_structure' && selectedStructure?.id === struct.id) {
+          handleOpenStructure(struct);
+        }
+      }, 1500); 
+    } catch (err) { console.error(err); } 
+  };
+
+  // ==========================================
+  // GESTION NAVIGATION ET EFFECTIF
+  // ==========================================
+  const handleOpenStructure = async (struct) => { 
+    setSelectedStructure(struct); setCurrentView('detail_structure'); 
+    try { 
+      const qEquipes = query(collection(db, 'equipes'), where('structureId', '==', struct.id)); 
+      const snap = await getDocs(qEquipes); 
+      setEquipesStructure(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))); 
+    } catch (err) { console.error(err); } 
+  };
+
+  const handleOpenEquipe = async (equipe) => { 
+    setSelectedEquipe(equipe); setCurrentView('detail_equipe'); setOpenMenuId(null); 
+    try { 
+      const qMembres = query(collection(db, 'membres'), where('cibleId', '==', equipe.id), where('type', '==', 'equipe')); 
+      const snap = await getDocs(qMembres); 
+      const membresTemp = []; 
+      for (const d of snap.docs) { 
+        const lien = d.data(); 
+        const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId)); 
+        const isCoach = lien.isCoach ?? (lien.role === 'coach'); 
+        const isJoueur = lien.isJoueur ?? (lien.role === 'joueur'); 
+        if (userSnap.exists()) { 
+          membresTemp.push({ id: userSnap.id, membreDocId: d.id, isCoach, isJoueur, email: userSnap.data().email, posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste, stats: lien.coachStats || lien.stats || null, ...userSnap.data() }); 
+        } else { 
+          membresTemp.push({ id: lien.utilisateurId, membreDocId: d.id, isCoach, isJoueur, prenom: 'Nouveau', nom: 'Joueur', posteEquipe: 'Inconnu' }); 
+        } 
+      } 
+      setMembresEquipe(membresTemp); 
+    } catch (err) { console.error(err); } 
+  };
+
+  const handleJoinEquipe = async (e) => { 
+    e.preventDefault(); 
+    try { 
+      const eqSnap = await getDoc(doc(db, 'equipes', codeInvitation)); 
+      if (!eqSnap.exists()) { setMessageRejoindre("❌ Code invalide."); return; } 
+      const newMembreRef = await addDoc(collection(db, 'membres'), { utilisateurId: user.uid, cibleId: codeInvitation, type: 'equipe', isCoach: false, isJoueur: true }); 
+      setOnboardingMembreId(newMembreRef.id); 
+      setShowOnboardingModal(true); 
+      setCodeInvitation(''); 
+    } catch (err) { setMessageRejoindre("❌ Erreur."); } 
+  };
+
+  const handleSaveOnboarding = async (e) => { 
+    e.preventDefault(); 
+    try { 
+      await setDoc(doc(db, 'membres', onboardingMembreId), { isJoueur: true, poste1: onboardingStats.poste1, poste2: onboardingStats.poste2, stats: { attaque: onboardingStats.attaque, reception: onboardingStats.reception, passe: onboardingStats.passe, bloc: onboardingStats.bloc, defense: onboardingStats.defense, service: onboardingStats.service } }, { merge: true }); 
+      await setDoc(doc(db, 'utilisateurs', user.uid), { email: user.email, nom: nom || '', prenom: prenom || '', poste: onboardingStats.poste1 }, { merge: true }); 
+      setPoste(onboardingStats.poste1); 
+      setShowOnboardingModal(false); 
+      fetchMesDonnees(user.uid); 
+    } catch (err) { console.error(err); } 
+  };
+
+  const handlePromote = async (membre, mode) => { 
+    try { 
+      await updateDoc(doc(db, 'membres', membre.membreDocId), { isCoach: true, isJoueur: mode === 'Coach + Joueur' }); 
+      setOpenMenuId(null); 
+      handleOpenEquipe(selectedEquipe); 
+    } catch (err) {} 
+  };
+
+  const handleRemove = async (membre) => { 
+    if (window.confirm(`Sûr de vouloir retirer ${membre.prenom} de l'équipe ?`)) {
+      try { await deleteDoc(doc(db, 'membres', membre.membreDocId)); setOpenMenuId(null); handleOpenEquipe(selectedEquipe); } catch (err) {} 
+    }
+  };
+
+  const handleOpenCoachStats = (membre) => { 
+    setEditingMembre(membre); 
+    const baseStats = membre.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }; 
+    setCoachStats({ posteEquipe: membre.posteEquipe || membre.poste1 || 'Polyvalent', ...baseStats }); 
+    setOpenMenuId(null); 
+    setShowCoachStatsModal(true); 
+  };
+
+  const handleSaveCoachStats = async (e) => { 
+    e.preventDefault(); 
+    try { 
+      await updateDoc(doc(db, 'membres', editingMembre.membreDocId), { 
+        coachPoste: coachStats.posteEquipe, 
+        coachStats: { attaque: coachStats.attaque, reception: coachStats.reception, passe: coachStats.passe, bloc: coachStats.bloc, defense: coachStats.defense, service: coachStats.service } 
+      }); 
+      setShowCoachStatsModal(false); 
+      handleOpenEquipe(selectedEquipe); 
+    } catch (err) { console.error(err); } 
+  };
+
+  // ==========================================
+  // GÉNÉRATEUR ET PROFIL
+  // ==========================================
   const toggleTeamSelection = (equipeId) => { setSelectedTeamsForAlgo(prev => prev.includes(equipeId) ? prev.filter(id => id !== equipeId) : [...prev, equipeId] ); };
-  const handleSelectModeAndConfigure = async (mode) => { setAlgoMode(mode); try { let allPlayers = []; for (const teamId of selectedTeamsForAlgo) { const qMembres = query(collection(db, 'membres'), where('cibleId', '==', teamId), where('type', '==', 'equipe')); const snap = await getDocs(qMembres); for (const d of snap.docs) { const lien = d.data(); if (lien.isJoueur) { const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId)); if (userSnap.exists() && !allPlayers.find(p => p.id === userSnap.id)) { allPlayers.push({ id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '', photoURL: userSnap.data().photoURL || '', posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent', stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 } }); } } } } if (allPlayers.length === 0) allPlayers = [...mockPlayers]; setPoolOfPlayers(allPlayers); setAlgoStep(3); } catch (err) { console.error(err); } };
+  const handleSelectModeAndConfigure = async (mode) => { setAlgoMode(mode); try { let allPlayers = []; for (const teamId of selectedTeamsForAlgo) { const qMembres = query(collection(db, 'membres'), where('cibleId', '==', teamId), where('type', 'equipe')); const snap = await getDocs(qMembres); for (const d of snap.docs) { const lien = d.data(); if (lien.isJoueur) { const userSnap = await getDoc(doc(db, 'utilisateurs', lien.utilisateurId)); if (userSnap.exists() && !allPlayers.find(p => p.id === userSnap.id)) { allPlayers.push({ id: userSnap.id, prenom: userSnap.data().prenom || 'Joueur', nom: userSnap.data().nom || '', photoURL: userSnap.data().photoURL || '', posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste || 'Polyvalent', stats: lien.coachStats || lien.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 } }); } } } } if (allPlayers.length === 0) allPlayers = [...mockPlayers]; setPoolOfPlayers(allPlayers); setAlgoStep(3); } catch (err) { console.error(err); } };
   const handleSaveProfile = async (e) => { e.preventDefault(); try { await setDoc(doc(db, 'utilisateurs', user.uid), { nom, prenom, poste, email: user.email, photoURL: photoUrl }, { merge: true }); setMessageProfil('✅ Profil mis à jour !'); setIsEditingProfile(false); setTimeout(() => setMessageProfil(''), 3000); } catch (err) {} };
   const handlePhotoUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onloadend = () => setPhotoUrl(reader.result); reader.readAsDataURL(file); } };
   
-  // Authentification Email / Google corrigée
-  const handleAuth = async (e) => { 
-    e.preventDefault(); 
-    setError('');
-    try { 
-      if (isLoginMode) {
-        await signInWithEmailAndPassword(auth, email, password); 
-      } else {
-        await createUserWithEmailAndPassword(auth, email, password); 
-      }
-    } catch (err) { 
-      setError(err.message || "Erreur d'authentification."); 
-    } 
-  };
-  
-  const handleGoogle = async () => { 
-    setError('');
-    try { 
-      await signInWithPopup(auth, new GoogleAuthProvider()); 
-    } catch (err) { 
-      setError(err.message || "Erreur avec Google."); 
-    } 
-  };
-
+  const handleAuth = async (e) => { e.preventDefault(); setError(''); try { if (isLoginMode) { await signInWithEmailAndPassword(auth, email, password); } else { await createUserWithEmailAndPassword(auth, email, password); } } catch (err) { setError(err.message || "Erreur d'authentification."); } };
+  const handleGoogle = async () => { setError(''); try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (err) { setError(err.message || "Erreur avec Google."); } };
   const handleLogout = () => signOut(auth);
 
   if (user) {
@@ -263,20 +364,26 @@ function App() {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col relative">
         <div className="flex-grow pb-24"> 
+          {/* ========================================== ONGLET ACCUEIL ========================================== */}
           {activeTab === 'accueil' && (
             <div className="animate-fade-in p-4 relative min-h-screen">
               {currentView === 'main' && (
                 <>
                   <div className="flex justify-between items-center mb-6"><h1 className="text-2xl font-bold text-gray-800">Mes Groupes</h1><div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg">{prenom ? prenom.charAt(0).toUpperCase() : 'U'}</div></div>
                   <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6"><h2 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2"><UserPlus size={16}/> Rejoindre une équipe</h2><form onSubmit={handleJoinEquipe} className="flex gap-2"><input type="text" value={codeInvitation} onChange={(e) => setCodeInvitation(e.target.value)} placeholder="Code d'invitation..." className="flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm" required /><button type="submit" className="bg-gray-800 text-white font-bold px-4 rounded-lg text-sm">Rejoindre</button></form></div>
-                  {messageRejoindre && <p className="text-xs font-bold text-center mb-4">{messageRejoindre}</p>}
+                  {messageRejoindre && <p className="text-xs font-bold text-center mb-4 text-indigo-600">{messageRejoindre}</p>}
                   {mesStructures.length > 0 && (<div className="mb-6"><h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Structures (Espace Coach)</h2><div className="space-y-3">{mesStructures.map(struct => (<div key={struct.id} onClick={() => handleOpenStructure(struct)} className="bg-gradient-to-r from-blue-600 to-indigo-700 p-5 rounded-xl shadow-md text-white flex justify-between items-center cursor-pointer"><div><p className="font-bold text-xl">{struct.nom}</p></div><ChevronRight className="text-blue-200" /></div>))}</div></div>)}
                   {mesEquipes.length > 0 && (<div><h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Mes Équipes</h2><div className="space-y-3">{mesEquipes.map(eq => (<div key={eq.id} onClick={() => handleOpenEquipe(eq)} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center cursor-pointer"><div><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">{eq.nomStructure}</p><p className="font-bold text-gray-800">{eq.nom}</p></div><div className="flex flex-col gap-1 items-end">{eq.isCoach && <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded border border-indigo-100">Coach</span>}{eq.isJoueur && <span className="text-[10px] bg-green-50 text-green-700 font-bold px-2 py-0.5 rounded border border-green-100">Joueur</span>}</div></div>))}</div></div>)}
-                  <button onClick={() => setCurrentView('create_structure')} className="fixed bottom-24 right-6 w-14 h-14 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg"><Plus size={28} /></button>
                 </>
               )}
               {currentView === 'detail_structure' && selectedStructure && (
-                <div className="animate-fade-in"><button onClick={() => setCurrentView('main')} className="text-blue-600 text-sm font-bold mb-4 flex items-center">← Retour</button><div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 rounded-xl shadow-md text-white mb-6"><h2 className="text-3xl font-bold">{selectedStructure.nom}</h2></div><div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-800 text-lg">Équipes</h3><button onClick={() => setIsCreatingEquipe(!isCreatingEquipe)} className="bg-blue-100 text-blue-700 p-2 px-3 rounded-lg font-bold text-sm">{isCreatingEquipe ? 'Annuler' : '+ Nouvelle équipe'}</button></div>{isCreatingEquipe && (<form onSubmit={handleCreateEquipe} className="flex gap-3 mb-4"><input type="text" value={nomNouvelleEquipe} onChange={(e) => setNomNouvelleEquipe(e.target.value)} placeholder="Nom" className="flex-grow border border-gray-300 rounded-lg px-3 py-2" required /><button type="submit" className="bg-blue-600 text-white font-bold px-4 rounded-lg">Créer</button></form>)}<div className="space-y-3">{equipesStructure.map(eq => (<div key={eq.id} onClick={() => handleOpenEquipe(eq)} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center cursor-pointer"><p className="font-bold text-gray-800 text-lg">{eq.nom}</p><ChevronRight className="text-gray-400" /></div>))}</div></div>
+                <div className="animate-fade-in">
+                  <button onClick={() => setCurrentView('main')} className="text-blue-600 text-sm font-bold mb-4 flex items-center">← Retour</button>
+                  <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 rounded-xl shadow-md text-white mb-6"><h2 className="text-3xl font-bold">{selectedStructure.nom}</h2></div>
+                  <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-800 text-lg">Équipes</h3></div>
+                  <div className="space-y-3">{equipesStructure.map(eq => (<div key={eq.id} onClick={() => handleOpenEquipe(eq)} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center cursor-pointer"><p className="font-bold text-gray-800 text-lg">{eq.nom}</p><ChevronRight className="text-gray-400" /></div>))}</div>
+                  {equipesStructure.length === 0 && <p className="text-sm text-gray-500 italic mt-4 bg-white p-4 rounded-xl text-center">Aucune équipe dans cette structure.<br/>Utilise le bouton bleu en bas à droite pour en créer une.</p>}
+                </div>
               )}
               {currentView === 'detail_equipe' && selectedEquipe && (
                 <div className="animate-fade-in relative">
@@ -286,12 +393,125 @@ function App() {
                   <h3 className="font-bold text-gray-800 text-lg mb-3 flex items-center gap-2">Staff & Coachs</h3>
                   <div className="space-y-3 mb-8">{membresEquipe.filter(m => m.isCoach).map(membre => (<div key={membre.id} className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex justify-between items-center"><p className="font-bold text-indigo-900">{membre.prenom} {membre.nom}</p></div>))}</div>
                   <h3 className="font-bold text-gray-800 text-lg mb-3">Effectif</h3>
-                  <div className="space-y-3 mb-10">{membresEquipe.filter(m => m.isJoueur).map(membre => (<div key={membre.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center relative"><div><p className="font-bold text-gray-800">{membre.prenom} {membre.nom}</p><p className="text-xs text-gray-500">{membre.coachPoste || membre.posteEquipe}</p></div>{membresEquipe.find(m => m.id === user.uid)?.isCoach && (<div className="relative z-20"><button onClick={() => setOpenMenuId(openMenuId === membre.id ? null : membre.id)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><MoreVertical size={20} /></button>{openMenuId === membre.id && (<div className="absolute right-0 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden py-1"><button onClick={() => handlePromote(membre, 'Coach + Joueur')} className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-indigo-50">👑 Promouvoir</button><button onClick={() => handleRemove(membre)} className="w-full text-left px-4 py-3 text-sm text-red-600">❌ Retirer</button></div>)}</div>)}</div>))}</div>
+                  <div className="space-y-3 mb-10">{membresEquipe.filter(m => m.isJoueur).map(membre => (<div key={membre.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center relative"><div><p className="font-bold text-gray-800">{membre.prenom} {membre.nom}</p><p className="text-xs text-gray-500">{membre.coachPoste || membre.posteEquipe}</p></div>{membresEquipe.find(m => m.id === user.uid)?.isCoach && (<div className="relative z-20"><button onClick={() => setOpenMenuId(openMenuId === membre.id ? null : membre.id)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><MoreVertical size={20} /></button>{openMenuId === membre.id && (<div className="absolute right-0 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden py-1"><button onClick={() => handleOpenCoachStats(membre)} className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-blue-50">📊 Éditer les stats</button><button onClick={() => handlePromote(membre, 'Coach + Joueur')} className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-indigo-50">👑 Promouvoir</button><button onClick={() => handleRemove(membre)} className="w-full text-left px-4 py-3 text-sm text-red-600">❌ Retirer</button></div>)}</div>)}</div>))}</div>
                 </div>
+              )}
+
+              {/* BOUTON + FLOTTANT GLOBAL DANS L'ONGLET ACCUEIL */}
+              {currentView !== 'detail_equipe' && (
+                <button 
+                  onClick={() => {
+                      if (currentView === 'detail_structure' && selectedStructure) {
+                          setCreateType('equipe');
+                          setSelectedStructureIdForNewTeam(selectedStructure.id);
+                      } else {
+                          setCreateType('structure');
+                          if (mesStructures.length > 0) setSelectedStructureIdForNewTeam(mesStructures[0].id);
+                      }
+                      setShowCreateModal(true);
+                  }} 
+                  className="fixed bottom-24 right-6 w-14 h-14 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg z-40 hover:bg-blue-700 transition-all"
+                >
+                  <Plus size={28} />
+                </button>
               )}
             </div>
           )}
 
+          {/* ========================================== MODALES MANQUANTES (ONBOARDING & COACH STATS) ========================================== */}
+          {showOnboardingModal && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">Ton profil Joueur</h2>
+                <form onSubmit={handleSaveOnboarding} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Poste principal</label>
+                    <select value={onboardingStats.poste1} onChange={e => setOnboardingStats({...onboardingStats, poste1: e.target.value})} className="w-full border border-gray-300 rounded-lg px-3 py-2 font-medium">
+                      <option value="Passeur (P)">Passeur (P)</option>
+                      <option value="Pointu (Pt)">Pointu (Pt)</option>
+                      <option value="Réceptionneur-Attaquant (R4)">Réceptionneur-Attaquant (R4)</option>
+                      <option value="Central (C)">Central (C)</option>
+                      <option value="Libéro (L)">Libéro (L)</option>
+                      <option value="Polyvalent">Polyvalent</option>
+                    </select>
+                  </div>
+                  <button type="submit" className="w-full bg-green-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-green-700">Rejoindre l'équipe</button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {showCoachStatsModal && editingMembre && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">Stats de {editingMembre.prenom}</h2>
+                <form onSubmit={handleSaveCoachStats} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Poste assigné (Coach)</label>
+                    <select value={coachStats.posteEquipe} onChange={e => setCoachStats({...coachStats, posteEquipe: e.target.value})} className="w-full border border-gray-300 rounded-lg px-3 py-2 font-medium">
+                      <option value="Passeur (P)">Passeur (P)</option>
+                      <option value="Pointu (Pt)">Pointu (Pt)</option>
+                      <option value="Réceptionneur-Attaquant (R4)">Réceptionneur-Attaquant (R4)</option>
+                      <option value="Central (C)">Central (C)</option>
+                      <option value="Libéro (L)">Libéro (L)</option>
+                      <option value="Polyvalent">Polyvalent</option>
+                    </select>
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button type="button" onClick={() => setShowCoachStatsModal(false)} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-lg">Annuler</button>
+                    <button type="submit" className="flex-1 bg-indigo-600 text-white font-bold py-3 rounded-lg">Enregistrer</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================== MODALE DE CRÉATION UNIFIÉE ========================================== */}
+          {showCreateModal && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-fade-in-up relative">
+                <button onClick={() => setShowCreateModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 font-bold text-xl">✕</button>
+                <h2 className="text-xl font-bold text-gray-800 mb-6">Créer un groupe</h2>
+
+                {mesStructures.length > 0 && (
+                    <div className="flex gap-2 mb-6 bg-gray-100 p-1 rounded-lg">
+                        <button type="button" onClick={() => setCreateType('structure')} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${createType === 'structure' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>Structure</button>
+                        <button type="button" onClick={() => setCreateType('equipe')} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${createType === 'equipe' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}>Équipe</button>
+                    </div>
+                )}
+
+                {messageCreation && <div className="mb-4 p-3 bg-green-100 text-green-700 text-sm font-bold rounded-lg text-center">{messageCreation}</div>}
+
+                {createType === 'structure' ? (
+                  <form onSubmit={handleCreateStructure} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nom de la structure</label>
+                      <input type="text" value={nomStructure} onChange={e => setNomStructure(e.target.value)} placeholder="Ex: Volley Club Paris" className="w-full border border-gray-300 rounded-lg px-3 py-2" required />
+                    </div>
+                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-blue-700">Créer la structure</button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleCreateEquipe} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Structure parente</label>
+                      <select value={selectedStructureIdForNewTeam} onChange={e => setSelectedStructureIdForNewTeam(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2 font-medium" required>
+                        {mesStructures.map(s => (
+                          <option key={s.id} value={s.id}>{s.nom}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nom de l'équipe</label>
+                      <input type="text" value={nomNouvelleEquipe} onChange={e => setNomNouvelleEquipe(e.target.value)} placeholder="Ex: M18 Masc" className="w-full border border-gray-300 rounded-lg px-3 py-2" required />
+                    </div>
+                    <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-indigo-700">Créer l'équipe</button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================== RESTE DU CODE (AGENDA, GÉNÉRATEUR, PROFIL) ========================================== */}
           {activeTab === 'calendrier' && (
             <div className="animate-fade-in p-4 relative min-h-screen">
               <div className="flex justify-between items-center mb-6">
