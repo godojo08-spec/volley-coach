@@ -1,4 +1,4 @@
-import { Wand2, CheckCircle2, Settings } from 'lucide-react';
+import { Wand2, CheckCircle2, Settings, FolderOpen, Trash2, Calendar } from 'lucide-react';
 import TeamGenerator from '../TeamGenerator';
 
 export default function GenerateurView({
@@ -12,7 +12,13 @@ export default function GenerateurView({
   algoMode,
   algoConfig,
   setAlgoConfig,
-  poolOfPlayers
+  poolOfPlayers,
+  compositionsSauvegardees,
+  handleSaveComposition,
+  handleOpenSavedComposition,
+  handleDeleteComposition,
+  loadedComposition,
+  setLoadedComposition
 }) {
   return (
     <div className="animate-fade-in p-4 relative min-h-screen">
@@ -22,13 +28,13 @@ export default function GenerateurView({
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Générateur</h1>
-          <p className="text-sm text-gray-500">Crée des équipes équilibrées</p>
+          <p className="text-sm text-gray-500">Crée et sauvegarde tes équipes</p>
         </div>
       </div>
 
       {algoStep === 1 && (
         <div className="animate-fade-in">
-          <h2 className="text-lg font-bold text-gray-800 mb-4">1. Quelles équipes s'entraînent ?</h2>
+          <h2 className="text-lg font-bold text-gray-800 mb-4">Quelles équipes s'entraînent ?</h2>
           <div className="space-y-3 mb-6">
             {mesEquipes
               .filter(eq => eq.isCoach)
@@ -58,9 +64,60 @@ export default function GenerateurView({
               })}
           </div>
           {selectedTeamsForAlgo.length > 0 && (
-            <button onClick={handleGoToStep2} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-md">
+            <button onClick={handleGoToStep2} className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-md mb-8">
               Continuer
             </button>
+          )}
+
+          {/* LISTE DES COMPOSITIONS SAUVEGARDÉES */}
+          {compositionsSauvegardees && compositionsSauvegardees.length > 0 && (
+            <div className="mt-8 pt-6 border-t border-gray-200">
+              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <FolderOpen size={16} /> Compositions sauvegardées ({compositionsSauvegardees.length})
+              </h2>
+              <div className="space-y-3">
+                {compositionsSauvegardees.map(compo => (
+                  <div
+                    key={compo.id}
+                    className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center gap-3"
+                  >
+                    <div
+                      onClick={() => handleOpenSavedComposition(compo)}
+                      className="flex-grow cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="font-bold text-gray-800">{compo.titre}</p>
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded uppercase">
+                          {compo.mode}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="flex items-center gap-1">
+                          <Calendar size={12} /> {new Date(compo.dateCreation).toLocaleDateString('fr-FR')}
+                        </span>
+                        {compo.nomsEquipes?.length > 0 && (
+                          <span>• {compo.nomsEquipes.join(', ')}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handleOpenSavedComposition(compo)}
+                        className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs px-3 py-2 rounded-lg"
+                      >
+                        Ouvrir
+                      </button>
+                      <button
+                        onClick={() => handleDeleteComposition(compo.id)}
+                        className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -183,7 +240,21 @@ export default function GenerateurView({
 
       {algoStep === 4 && (
         <div className="animate-fade-in p-2 sm:p-4 relative">
-          <TeamGenerator mode={algoMode} players={poolOfPlayers} config={algoConfig} goBack={() => setAlgoStep(3)} />
+          <TeamGenerator
+            mode={algoMode}
+            players={poolOfPlayers}
+            config={algoConfig}
+            handleSaveComposition={handleSaveComposition}
+            loadedComposition={loadedComposition}
+            goBack={() => {
+              if (loadedComposition) {
+                setLoadedComposition(null);
+                setAlgoStep(1);
+              } else {
+                setAlgoStep(3);
+              }
+            }}
+          />
         </div>
       )}
     </div>

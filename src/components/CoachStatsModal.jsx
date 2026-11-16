@@ -19,7 +19,9 @@ export default function CoachStatsModal({
         {editingMembre.stats && (
           <div className="mb-6 p-4 bg-gray-100 rounded-xl opacity-70 border border-gray-200">
             <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">Auto-évaluation originale</h3>
-            <p className="text-sm font-medium mb-2 text-gray-700">Poste : <span className="font-bold">{editingMembre.posteEquipe}</span></p>
+            <p className="text-sm font-medium mb-2 text-gray-700">
+              Poste : <span className="font-bold">{editingMembre.posteOriginal || editingMembre.posteEquipe}</span>
+            </p>
             <div className="flex flex-wrap gap-2">
               {statsFields.map(stat => (
                 <span key={stat.key} className="text-[10px] bg-gray-200 text-gray-600 font-bold px-2 py-1 rounded capitalize border border-gray-300">
@@ -49,7 +51,14 @@ export default function CoachStatsModal({
           </div>
 
           <div className="bg-indigo-50 p-5 rounded-xl space-y-5 border border-indigo-100">
-            <h3 className="font-bold text-indigo-800 text-sm uppercase tracking-wider mb-2">Notes Coach (1 à 10)</h3>
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-bold text-indigo-800 text-sm uppercase tracking-wider">Notes Coach (1 à 10)</h3>
+              {editingMembre.coachStats && (
+                <span className="text-[10px] bg-indigo-200 text-indigo-900 font-bold px-2 py-0.5 rounded">
+                  {editingMembre.coachUpdatedBy ? `Modifié par ${editingMembre.coachUpdatedBy}` : 'Déjà noté'}
+                </span>
+              )}
+            </div>
             {statsFields.map(stat => (
               <div key={stat.key}>
                 <div className="flex justify-between text-sm mb-1 font-medium capitalize text-indigo-900">

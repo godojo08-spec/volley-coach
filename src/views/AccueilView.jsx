@@ -24,7 +24,13 @@ export default function AccueilView({
   handleRemove,
   setCreateType,
   setSelectedStructureIdForNewTeam,
-  setShowCreateModal
+  setShowCreateModal,
+  setOnboardingMembreId,
+  setOnboardingStats,
+  setShowOnboardingModal,
+  handleBan, 
+  handleUnban, 
+  bannisEquipe
 }) {
   return (
     <div className="animate-fade-in p-4 relative min-h-screen">
@@ -165,7 +171,31 @@ export default function AccueilView({
                 </div>
               ))}
           </div>
-          <h3 className="font-bold text-gray-800 text-lg mb-3">Effectif</h3>
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="font-bold text-gray-800 text-lg">Effectif</h3>
+            {membresEquipe.find(m => m.id === user.uid)?.isCoach && !membresEquipe.find(m => m.id === user.uid)?.isJoueur && (
+              <button
+                onClick={() => {
+                  const monLien = membresEquipe.find(m => m.id === user.uid);
+                  setOnboardingMembreId(monLien.membreDocId);
+                  setOnboardingStats({
+                    poste1: monLien.posteEquipe || 'Polyvalent',
+                    poste2: 'Polyvalent',
+                    attaque: 5,
+                    reception: 5,
+                    passe: 5,
+                    bloc: 5,
+                    defense: 5,
+                    service: 5
+                  });
+                  setShowOnboardingModal(true);
+                }}
+                className="bg-green-100 text-green-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-200"
+              >
+                + Je joue aussi
+              </button>
+            )}
+          </div>
           <div className="space-y-3 mb-10">
             {membresEquipe
               .filter(m => m.isJoueur)
@@ -178,7 +208,14 @@ export default function AccueilView({
                     <p className="font-bold text-gray-800">
                       {membre.prenom} {membre.nom}
                     </p>
-                    <p className="text-xs text-gray-500">{membre.coachPoste || membre.posteEquipe}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-gray-500">{membre.coachPoste || membre.posteEquipe}</p>
+                      {membresEquipe.find(m => m.id === user.uid)?.isCoach && membre.coachStats && (
+                        <span className="text-[10px] bg-indigo-50 text-indigo-600 font-bold px-1.5 py-0.5 rounded border border-indigo-100">
+                          Noté coach
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {membresEquipe.find(m => m.id === user.uid)?.isCoach && (
                     <div className="relative z-20">
@@ -197,16 +234,30 @@ export default function AccueilView({
                             📊 Éditer les stats
                           </button>
                           <button
-                            onClick={() => handlePromote(membre, 'Coach + Joueur')}
+                            onClick={() => handlePromote(membre, 'Coach')}
                             className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-indigo-50"
                           >
-                            👑 Promouvoir
+                            👑 Coach uniquement
                           </button>
+                          {!membre.isCoach && (
+                            <button
+                              onClick={() => handlePromote(membre, 'Coach + Joueur')}
+                              className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-indigo-50 border-b border-gray-100"
+                            >
+                              👑 Coach + Joueur
+                            </button>
+                          )}
                           <button
                             onClick={() => handleRemove(membre)}
                             className="w-full text-left px-4 py-3 text-sm text-red-600"
                           >
                             ❌ Retirer
+                          </button>
+                          <button
+                            onClick={() => handleBan(membre, 7)}
+                            className="w-full text-left px-4 py-3 text-sm text-white bg-red-600 hover:bg-red-700 font-bold"
+                          >
+                            ⛔ Bannir (7 jours)
                           </button>
                         </div>
                       )}
@@ -215,6 +266,38 @@ export default function AccueilView({
                 </div>
               ))}
           </div>
+          
+          {membresEquipe.find(m => m.id === user.uid)?.isCoach && bannisEquipe?.length > 0 && (
+            <div className="mt-8 mb-10 bg-red-50 p-4 rounded-xl border border-red-200">
+              <h3 className="font-bold text-red-800 text-sm uppercase tracking-wider mb-3">
+                Membres suspendus ({bannisEquipe.length})
+              </h3>
+              <div className="space-y-2">
+                {bannisEquipe.map(ban => (
+                  <div
+                    key={ban.id}
+                    className="bg-white p-3 rounded-lg border border-red-100 flex justify-between items-center"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm">
+                        {ban.prenom} {ban.nom}{' '}
+                        {ban.email && <span className="text-xs font-normal text-gray-500">({ban.email})</span>}
+                      </p>
+                      <p className="text-[11px] text-red-600">
+                        Jusqu'au {new Date(ban.dateFin).toLocaleDateString('fr-FR')}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleUnban(ban.id)}
+                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold px-3 py-1.5 rounded-lg"
+                    >
+                      Débannir
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -59,6 +59,7 @@ function App() {
   const [equipesStructure, setEquipesStructure] = useState([]);
   const [selectedEquipe, setSelectedEquipe] = useState(null);
   const [membresEquipe, setMembresEquipe] = useState([]);
+  const [bannisEquipe, setBannisEquipe] = useState([]);
   const [codeInvitation, setCodeInvitation] = useState('');
   const [messageRejoindre, setMessageRejoindre] = useState('');
 
@@ -96,6 +97,7 @@ function App() {
   const [evenements, setEvenements] = useState([]);
   const [mesPresences, setMesPresences] = useState({});
   const [presencesGlobales, setPresencesGlobales] = useState({});
+  const [confirmationPresence, setConfirmationPresence] = useState(null);
   const defaultEventState = { titre: 'Entraînement', date: '', heure: '20:00', type: 'Entraînement', equipeIds: [] };
   const [showEventModal, setShowEventModal] = useState(false);
   const [eventFormData, setEventFormData] = useState(defaultEventState);
@@ -106,6 +108,8 @@ function App() {
   const [algoMode, setAlgoMode] = useState(null);
   const [poolOfPlayers, setPoolOfPlayers] = useState([]);
   const [algoConfig, setAlgoConfig] = useState({ numTeams: 2, playersPerTeam: 6, lockedRoles: {} });
+  const [compositionsSauvegardees, setCompositionsSauvegardees] = useState([]);
+  const [loadedComposition, setLoadedComposition] = useState(null);
 
   const statsFields = [
     { key: 'attaque', label: 'Attaque ⚔️' },
@@ -128,6 +132,7 @@ function App() {
           setPhotoUrl(docSnap.data().photoURL || '');
         }
         fetchMesDonnees(currentUser.uid);
+        fetchCompositions(currentUser.uid)
       } else {
         setNom('');
         setPrenom('');
@@ -137,6 +142,7 @@ function App() {
         setMesEquipes([]);
         setSelectedStructure(null);
         setSelectedEquipe(null);
+        setCompositionsSauvegardees([]);
       }
     });
     return () => unsubscribe();
@@ -188,21 +194,88 @@ function App() {
 
       const myPres = {};
       const globalPres = {};
+      const usersCache = {};
+      const teamMembersCache = {};
+
+      const getUserInfo = async uid => {
+        if (usersCache[uid]) return usersCache[uid];
+        const uSnap = await getDoc(doc(db, 'utilisateurs', uid));
+        const info = uSnap.exists()
+          ? { id: uid, prenom: uSnap.data().prenom || 'Joueur', nom: uSnap.data().nom || '' }
+          : { id: uid, prenom: 'Joueur', nom: '' };
+        usersCache[uid] = info;
+        return info;
+      };
 
       for (const ev of eventsData) {
-        globalPres[ev.id] = { present: 0, absent: 0, joueursPresents: [] };
+        // Récupérer tous les joueurs convoqués des équipes de l'événement
+        const joueursConvoques = [];
+        for (const tId of ev.equipeIds || []) {
+          if (!teamMembersCache[tId]) {
+            const qM = query(collection(db, 'membres'), where('cibleId', '==', tId), where('type', '==', 'equipe'));
+            const snapM = await getDocs(qM);
+            teamMembersCache[tId] = snapM.docs.map(d => d.data()).filter(m => m.isJoueur);
+          }
+          for (const m of teamMembersCache[tId]) {
+            if (!joueursConvoques.find(j => j.id === m.utilisateurId)) {
+              const info = await getUserInfo(m.utilisateurId);
+              joueursConvoques.push({
+                ...info,
+                poste: m.coachPoste || m.poste1 || ''
+              });
+            }
+          }
+        }
+
         const qP = query(collection(db, 'presences'), where('evenementId', '==', ev.id));
         const snapP = await getDocs(qP);
+        const reponsesMap = {};
 
         snapP.docs.forEach(docP => {
           const pData = docP.data();
+          reponsesMap[pData.utilisateurId] = pData.statut;
           if (pData.utilisateurId === user.uid) myPres[ev.id] = pData.statut;
-          if (pData.statut === 'present') {
-            globalPres[ev.id].present++;
-            globalPres[ev.id].joueursPresents.push(pData.utilisateurId);
-          }
-          if (pData.statut === 'absent') globalPres[ev.id].absent++;
         });
+
+        const listePresents = [];
+        const listeAbsents = [];
+        const listeEnAttente = [];
+        const joueursPresents = [];
+
+        for (const joueur of joueursConvoques) {
+          const statut = reponsesMap[joueur.id];
+          if (statut === 'present') {
+            listePresents.push(joueur);
+            joueursPresents.push(joueur.id);
+          } else if (statut === 'absent') {
+            listeAbsents.push(joueur);
+          } else {
+            listeEnAttente.push(joueur);
+          }
+        }
+
+        // Inclure d'éventuels répondants hors liste joueurs (ex: coach)
+        for (const [uid, statut] of Object.entries(reponsesMap)) {
+          if (!joueursConvoques.find(j => j.id === uid)) {
+            const info = await getUserInfo(uid);
+            if (statut === 'present') {
+              listePresents.push(info);
+              joueursPresents.push(uid);
+            } else if (statut === 'absent') {
+              listeAbsents.push(info);
+            }
+          }
+        }
+
+        globalPres[ev.id] = {
+          present: listePresents.length,
+          absent: listeAbsents.length,
+          enAttente: listeEnAttente.length,
+          joueursPresents,
+          listePresents,
+          listeAbsents,
+          listeEnAttente
+        };
       }
       setMesPresences(myPres);
       setPresencesGlobales(globalPres);
@@ -256,6 +329,11 @@ function App() {
         { evenementId: eventId, utilisateurId: user.uid, statut, dateReponse: new Date().toISOString() },
         { merge: true }
       );
+      setMesPresences(prev => ({ ...prev, [eventId]: statut }));
+      setConfirmationPresence({ eventId, statut });
+      setTimeout(() => {
+        setConfirmationPresence(prev => (prev?.eventId === eventId ? null : prev));
+      }, 3000);
       fetchAgenda();
     } catch (err) {
       console.error(err);
@@ -348,15 +426,21 @@ function App() {
         const isCoach = lien.isCoach ?? lien.role === 'coach';
         const isJoueur = lien.isJoueur ?? lien.role === 'joueur';
         if (userSnap.exists()) {
+          const userData = userSnap.data();
+          const posteOriginal = lien.poste1 || userData.poste || 'Polyvalent';
           membresTemp.push({
+            ...userData,
             id: userSnap.id,
             membreDocId: d.id,
             isCoach,
             isJoueur,
-            email: userSnap.data().email,
-            posteEquipe: lien.coachPoste || lien.poste1 || userSnap.data().poste,
-            stats: lien.coachStats || lien.stats || null,
-            ...userSnap.data()
+            email: userData.email,
+            posteOriginal,
+            coachPoste: lien.coachPoste || null,
+            posteEquipe: lien.coachPoste || posteOriginal,
+            stats: lien.stats || null,
+            coachStats: lien.coachStats || null,
+            coachUpdatedBy: lien.coachUpdatedBy || null
           });
         } else {
           membresTemp.push({
@@ -371,6 +455,21 @@ function App() {
         }
       }
       setMembresEquipe(membresTemp);
+
+      // Chargement des bannissements actifs de l'équipe
+      const qBans = query(collection(db, 'bannissements'), where('equipeId', '==', equipe.id));
+      const snapBans = await getDocs(qBans);
+      const maintenant = new Date();
+      const bannisActifs = [];
+      for (const bDoc of snapBans.docs) {
+        const bData = bDoc.data();
+        if (new Date(bData.dateFin) > maintenant) {
+          bannisActifs.push({ id: bDoc.id, ...bData });
+        } else {
+          await deleteDoc(doc(db, 'bannissements', bDoc.id));
+        }
+      }
+      setBannisEquipe(bannisActifs);
     } catch (err) {
       console.error(err);
     }
@@ -378,15 +477,52 @@ function App() {
 
   const handleJoinEquipe = async e => {
     e.preventDefault();
+    setMessageRejoindre('');
     try {
-      const eqSnap = await getDoc(doc(db, 'equipes', codeInvitation));
+      const codeNettoye = codeInvitation.trim();
+      const eqSnap = await getDoc(doc(db, 'equipes', codeNettoye));
       if (!eqSnap.exists()) {
         setMessageRejoindre('❌ Code invalide.');
         return;
       }
+
+      // Vérification si l'utilisateur est banni de cette équipe
+      const qBans = query(collection(db, 'bannissements'), where('equipeId', '==', codeNettoye));
+      const snapBans = await getDocs(qBans);
+      const maintenant = new Date();
+      const banActif = snapBans.docs
+        .map(d => d.data())
+        .find(
+          b =>
+            new Date(b.dateFin) > maintenant &&
+            ((b.email && b.email.toLowerCase() === (user.email || '').toLowerCase()) || b.utilisateurId === user.uid)
+        );
+
+      if (banActif) {
+        const dateFinFr = new Date(banActif.dateFin).toLocaleDateString('fr-FR', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        });
+        setMessageRejoindre(`⛔ Accès refusé : tu es suspendu de cette équipe jusqu'au ${dateFinFr}.`);
+        return;
+      }
+
+      // Vérification si déjà dans l'équipe
+      const qExist = query(
+        collection(db, 'membres'),
+        where('cibleId', '==', codeNettoye),
+        where('utilisateurId', '==', user.uid)
+      );
+      const existSnap = await getDocs(qExist);
+      if (!existSnap.empty) {
+        setMessageRejoindre('ℹ️ Tu fais déjà partie de cette équipe.');
+        return;
+      }
+
       const newMembreRef = await addDoc(collection(db, 'membres'), {
         utilisateurId: user.uid,
-        cibleId: codeInvitation,
+        cibleId: codeNettoye,
         type: 'equipe',
         isCoach: false,
         isJoueur: true
@@ -405,7 +541,7 @@ function App() {
       setShowOnboardingModal(true);
       setCodeInvitation('');
     } catch (err) {
-      setMessageRejoindre('❌ Erreur.');
+      setMessageRejoindre('❌ Erreur lors de la tentative de connexion.');
     }
   };
 
@@ -437,17 +573,25 @@ function App() {
       setPoste(onboardingStats.poste1);
       setShowOnboardingModal(false);
       fetchMesDonnees(user.uid);
+      if (selectedEquipe) handleOpenEquipe(selectedEquipe);
     } catch (err) {
       console.error(err);
     }
   };
 
   const handlePromote = async (membre, mode) => {
-    try {
-      await updateDoc(doc(db, 'membres', membre.membreDocId), { isCoach: true, isJoueur: mode === 'Coach + Joueur' });
-      setOpenMenuId(null);
-      handleOpenEquipe(selectedEquipe);
-    } catch (err) {}
+    if (window.confirm(`Sûr de vouloir passer ${membre.prenom} en rôle "${mode}" ?`)) {
+      try {
+        await updateDoc(doc(db, 'membres', membre.membreDocId), {
+          isCoach: true,
+          isJoueur: mode === 'Coach + Joueur'
+        });
+        setOpenMenuId(null);
+        handleOpenEquipe(selectedEquipe);
+      } catch (err) {
+        console.error(err);
+      }
+    }
   };
 
   const handleRemove = async membre => {
@@ -460,12 +604,72 @@ function App() {
     }
   };
 
-  const handleOpenCoachStats = membre => {
-    setEditingMembre(membre);
-    const baseStats = membre.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 };
-    setCoachStats({ posteEquipe: membre.coachPoste || membre.posteEquipe || 'Polyvalent', ...baseStats });
+  const handleBan = async (membre, jours = 7) => {
+    if (
+      window.confirm(
+        `Bannir ${membre.prenom} ${membre.nom} (${membre.email || 'sans e-mail'}) pendant ${jours} jours ? Il sera retiré et ne pourra pas revenir avant la fin du délai.`
+      )
+    ) {
+      try {
+        const dateFin = new Date(Date.now() + jours * 24 * 60 * 60 * 1000).toISOString();
+        await addDoc(collection(db, 'bannissements'), {
+          equipeId: selectedEquipe.id,
+          email: (membre.email || '').toLowerCase(),
+          utilisateurId: membre.id,
+          prenom: membre.prenom || '',
+          nom: membre.nom || '',
+          dateFin,
+          banniPar: prenom ? `${prenom} ${nom}`.trim() : user.email,
+          dateBannissement: new Date().toISOString()
+        });
+        await deleteDoc(doc(db, 'membres', membre.membreDocId));
+        setOpenMenuId(null);
+        handleOpenEquipe(selectedEquipe);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const handleUnban = async banId => {
+    if (window.confirm('Lever la suspension de ce joueur ?')) {
+      try {
+        await deleteDoc(doc(db, 'bannissements', banId));
+        handleOpenEquipe(selectedEquipe);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const handleOpenCoachStats = async membre => {
     setOpenMenuId(null);
-    setShowCoachStatsModal(true);
+    try {
+      const membreSnap = await getDoc(doc(db, 'membres', membre.membreDocId));
+      const lien = membreSnap.exists() ? membreSnap.data() : {};
+      const originalStats = lien.stats || membre.stats || null;
+      const currentCoachStats = lien.coachStats || membre.coachStats || null;
+      const posteOriginal = lien.poste1 || membre.posteOriginal || membre.poste || 'Polyvalent';
+      const currentCoachPoste = lien.coachPoste || membre.coachPoste || null;
+
+      setEditingMembre({
+        ...membre,
+        stats: originalStats,
+        coachStats: currentCoachStats,
+        posteOriginal,
+        coachPoste: currentCoachPoste,
+        coachUpdatedBy: lien.coachUpdatedBy || membre.coachUpdatedBy || null
+      });
+
+      const baseStats = currentCoachStats || originalStats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 };
+      setCoachStats({
+        posteEquipe: currentCoachPoste || posteOriginal,
+        ...baseStats
+      });
+      setShowCoachStatsModal(true);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleSaveCoachStats = async e => {
@@ -480,7 +684,9 @@ function App() {
           bloc: coachStats.bloc,
           defense: coachStats.defense,
           service: coachStats.service
-        }
+        },
+        coachUpdatedBy: prenom ? `${prenom} ${nom}`.trim() : user.email,
+        coachUpdatedAt: new Date().toISOString()
       });
       setShowCoachStatsModal(false);
       handleOpenEquipe(selectedEquipe);
@@ -494,6 +700,7 @@ function App() {
   };
 
   const handleGoToStep2 = async () => {
+    setLoadedComposition(null);
     try {
       let allPlayers = [];
       for (const teamId of selectedTeamsForAlgo) {
@@ -525,6 +732,7 @@ function App() {
   };
 
   const handleGenerateFromEvent = async event => {
+    setLoadedComposition(null);
     const presentIds = presencesGlobales[event.id]?.joueursPresents || [];
     if (presentIds.length === 0) return alert('Aucun joueur présent pour générer une équipe.');
     try {
@@ -561,8 +769,80 @@ function App() {
   };
 
   const handleSelectModeAndConfigure = mode => {
+    setLoadedComposition(null);
     setAlgoMode(mode);
     setAlgoStep(3);
+  };
+
+  const fetchCompositions = async uid => {
+    try {
+      const qComp = query(collection(db, 'compositions'), where('createurId', '==', uid));
+      const snap = await getDocs(qComp);
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(b.dateCreation) - new Date(a.dateCreation));
+      setCompositionsSauvegardees(list);
+    } catch (err) {
+      console.error('Erreur chargement compositions:', err);
+    }
+  };
+
+  const handleSaveComposition = async ({ titre, mode, config, teams, bench }) => {
+    try {
+      const serializedTeams = teams.map((teamArr, idx) => ({
+        nom: `Équipe ${idx + 1}`,
+        joueurs: teamArr.map(p => p || null)
+      }));
+      const nomsEquipes = mesEquipes
+        .filter(eq => selectedTeamsForAlgo.includes(eq.id))
+        .map(eq => eq.nom);
+
+      await addDoc(collection(db, 'compositions'), {
+        titre: titre.trim() || `Compo ${mode} - ${new Date().toLocaleDateString('fr-FR')}`,
+        mode,
+        config,
+        teamsData: serializedTeams,
+        bench: bench || [],
+        equipeIds: selectedTeamsForAlgo,
+        nomsEquipes,
+        createurId: user.uid,
+        dateCreation: new Date().toISOString()
+      });
+      await fetchCompositions(user.uid);
+      return true;
+    } catch (err) {
+      console.error('Erreur sauvegarde composition:', err);
+      return false;
+    }
+  };
+
+  const handleOpenSavedComposition = compo => {
+    const restoredTeams = (compo.teamsData || []).map(t => t.joueurs || []);
+    const restoredBench = compo.bench || [];
+    const allSavedPlayers = [...restoredTeams.flat(), ...restoredBench].filter(Boolean);
+
+    setPoolOfPlayers(allSavedPlayers);
+    setSelectedTeamsForAlgo(compo.equipeIds || []);
+    setAlgoMode(compo.mode);
+    setAlgoConfig(compo.config || { numTeams: restoredTeams.length || 2, playersPerTeam: 6, lockedRoles: {} });
+    setLoadedComposition({
+      id: compo.id,
+      titre: compo.titre,
+      teams: restoredTeams,
+      bench: restoredBench
+    });
+    setAlgoStep(4);
+  };
+
+  const handleDeleteComposition = async compoId => {
+    if (window.confirm('Supprimer cette composition sauvegardée ?')) {
+      try {
+        await deleteDoc(doc(db, 'compositions', compoId));
+        fetchCompositions(user.uid);
+      } catch (err) {
+        console.error(err);
+      }
+    }
   };
 
   const handleSaveProfile = async e => {
@@ -612,6 +892,21 @@ function App() {
   if (user) {
     const isCoachOfAnyTeam = mesEquipes.some(eq => eq.isCoach);
 
+    const maintenant = new Date();
+    const debutAujourdhui = new Date(maintenant.getFullYear(), maintenant.getMonth(), maintenant.getDate());
+    const dans7Jours = new Date(debutAujourdhui.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const evenements7Jours = evenements.filter(ev => {
+      const dateEv = new Date(`${ev.date}T${ev.heure || '00:00'}`);
+      const concerne = mesEquipes.some(e => (ev.equipeIds || []).includes(e.id));
+      return concerne && dateEv >= debutAujourdhui && dateEv <= dans7Jours;
+    });
+
+    const notifAgendaCount = evenements7Jours.filter(ev => {
+      const estJoueur = mesEquipes.some(e => (ev.equipeIds || []).includes(e.id) && e.isJoueur);
+      return estJoueur && !mesPresences[ev.id];
+    }).length;
+
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col relative">
         <div className="flex-grow pb-24">
@@ -638,9 +933,15 @@ function App() {
               handleOpenCoachStats={handleOpenCoachStats}
               handlePromote={handlePromote}
               handleRemove={handleRemove}
+              handleBan={handleBan}
+              handleUnban={handleUnban}
+              bannisEquipe={bannisEquipe}
               setCreateType={setCreateType}
               setSelectedStructureIdForNewTeam={setSelectedStructureIdForNewTeam}
               setShowCreateModal={setShowCreateModal}
+              setOnboardingMembreId={setOnboardingMembreId}
+              setOnboardingStats={setOnboardingStats}
+              setShowOnboardingModal={setShowOnboardingModal}
             />
           )}
 
@@ -656,6 +957,8 @@ function App() {
               handleDeleteEvent={handleDeleteEvent}
               handlePresence={handlePresence}
               handleGenerateFromEvent={handleGenerateFromEvent}
+              confirmationPresence={confirmationPresence}
+              evenements7Jours={evenements7Jours}
             />
           )}
 
@@ -672,6 +975,12 @@ function App() {
               algoConfig={algoConfig}
               setAlgoConfig={setAlgoConfig}
               poolOfPlayers={poolOfPlayers}
+              compositionsSauvegardees={compositionsSauvegardees}
+              handleSaveComposition={handleSaveComposition}
+              handleOpenSavedComposition={handleOpenSavedComposition}
+              handleDeleteComposition={handleDeleteComposition}
+              loadedComposition={loadedComposition}
+              setLoadedComposition={setLoadedComposition}
             />
           )}
 
@@ -747,6 +1056,7 @@ function App() {
           setCurrentView={setCurrentView}
           setAlgoStep={setAlgoStep}
           isCoachOfAnyTeam={isCoachOfAnyTeam}
+          notifAgendaCount={notifAgendaCount}
         />
       </div>
     );
