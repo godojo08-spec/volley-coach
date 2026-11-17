@@ -5,7 +5,9 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   onAuthStateChanged,
-  signOut
+  signOut,
+  getAuth,
+  deleteUser
 } from 'firebase/auth';
 import {
   doc,
@@ -845,6 +847,56 @@ function App() {
     }
   };
 
+  const handleDeleteAccount = async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return { success: false, error: 'Utilisateur non connecté.' };
+
+    const uid = currentUser.uid;
+
+    try {
+      // 1. Supprimer toutes ses adhésions aux équipes et structures (collection "membres")
+      const qMembres = query(collection(db, 'membres'), where('utilisateurId', '==', uid));
+      const snapMembres = await getDocs(qMembres);
+      await Promise.all(snapMembres.docs.map(d => deleteDoc(doc(db, 'membres', d.id))));
+
+      // 2. Supprimer toutes ses réponses de présence (collection "presences")
+      const qPresences = query(collection(db, 'presences'), where('utilisateurId', '==', uid));
+      const snapPresences = await getDocs(qPresences);
+      await Promise.all(snapPresences.docs.map(d => deleteDoc(doc(db, 'presences', d.id))));
+
+      // 3. Supprimer ses compositions sauvegardées (collection "compositions")
+      const qCompos = query(collection(db, 'compositions'), where('createurId', '==', uid));
+      const snapCompos = await getDocs(qCompos);
+      await Promise.all(snapCompos.docs.map(d => deleteDoc(doc(db, 'compositions', d.id))));
+
+      // 4. Supprimer d'éventuels bannissements associés (collection "bannissements")
+      const qBannis = query(collection(db, 'bannissements'), where('utilisateurId', '==', uid));
+      const snapBannis = await getDocs(qBannis);
+      await Promise.all(snapBannis.docs.map(d => deleteDoc(doc(db, 'bannissements', d.id))));
+      
+      // 5. Supprimer sa fiche profil principale (collection "utilisateurs")
+      await deleteDoc(doc(db, 'utilisateurs', uid));
+
+      // 6. Supprimer définitivement le compte d'authentification Firebase Auth
+      await deleteUser(currentUser);
+
+      return { success: true };
+    } catch (err) {
+      console.error('Erreur lors de la suppression du compte :', err);
+      if (err.code === 'auth/requires-recent-login') {
+        return {
+          success: false,
+          error:
+            'Par mesure de sécurité, déconnecte-toi puis reconnecte-toi avant de relancer la suppression définitive.'
+        };
+      }
+      return {
+        success: false,
+        error: 'Une erreur est survenue lors de la suppression du compte.'
+      };
+    }
+  };
+
   const handleSaveProfile = async e => {
     e.preventDefault();
     try {
@@ -999,6 +1051,7 @@ function App() {
               user={user}
               handleSaveProfile={handleSaveProfile}
               handleLogout={handleLogout}
+              handleDeleteAccount={handleDeleteAccount}
             />
           )}
         </div>
