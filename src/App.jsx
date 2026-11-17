@@ -211,10 +211,9 @@ function App() {
         }
       }
 
-      const eventsData = snapEvents.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => new Date(`${a.date}T${a.heure}`) - new Date(`${b.date}T${b.heure}`));
-
+      const eventsData = eventsActifs.sort(
+        (a, b) => new Date(`${a.date}T${a.heure}`) - new Date(`${b.date}T${b.heure}`)
+      );
       setEvenements(eventsData);
 
       const myPres = {};
