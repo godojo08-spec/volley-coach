@@ -188,6 +188,29 @@ function App() {
       const qEvents = query(collection(db, 'evenements'), where('equipeIds', 'array-contains-any', teamIds));
       const snapEvents = await getDocs(qEvents);
 
+      const maintenant = new Date();
+      const douzeHeuresMs = 12 * 60 * 60 * 1000;
+      const eventsActifs = [];
+
+      for (const d of snapEvents.docs) {
+        const evData = { id: d.id, ...d.data() };
+        const dateDebut = new Date(`${evData.date}T${evData.heure || '00:00'}`);
+
+        // Si l'événement a commencé il y a plus de 12 heures, on le nettoie
+        if (!isNaN(dateDebut.getTime()) && maintenant.getTime() - dateDebut.getTime() > douzeHeuresMs) {
+          try {
+            const qPresEvent = query(collection(db, 'presences'), where('evenementId', '==', evData.id));
+            const snapPresEvent = await getDocs(qPresEvent);
+            await Promise.all(snapPresEvent.docs.map(pDoc => deleteDoc(doc(db, 'presences', pDoc.id))));
+            await deleteDoc(doc(db, 'evenements', evData.id));
+          } catch (delErr) {
+            console.error("Erreur lors du nettoyage de l'événement expiré :", delErr);
+          }
+        } else {
+          eventsActifs.push(evData);
+        }
+      }
+
       const eventsData = snapEvents.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .sort((a, b) => new Date(`${a.date}T${a.heure}`) - new Date(`${b.date}T${b.heure}`));
@@ -873,7 +896,7 @@ function App() {
       const qBannis = query(collection(db, 'bannissements'), where('utilisateurId', '==', uid));
       const snapBannis = await getDocs(qBannis);
       await Promise.all(snapBannis.docs.map(d => deleteDoc(doc(db, 'bannissements', d.id))));
-      
+
       // 5. Supprimer sa fiche profil principale (collection "utilisateurs")
       await deleteDoc(doc(db, 'utilisateurs', uid));
 

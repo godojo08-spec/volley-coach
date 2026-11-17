@@ -148,7 +148,7 @@ export default function AccueilView({
 
       {currentView === 'detail_equipe' && selectedEquipe && (
         <div className="animate-fade-in relative">
-          {openMenuId && <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)}></div>}
+          {openMenuId && <div className="fixed inset-0 z-20" onClick={() => setOpenMenuId(null)}></div>}
           <button onClick={() => setCurrentView('main')} className="text-blue-600 text-sm font-bold mb-4">
             ← Retour
           </button>
@@ -202,7 +202,9 @@ export default function AccueilView({
               .map(membre => (
                 <div
                   key={membre.id}
-                  className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center relative"
+                  className={`bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center relative ${
+                    openMenuId === membre.id ? 'z-40' : 'z-10'
+                  }`}
                 >
                   <div>
                     <p className="font-bold text-gray-800">
@@ -218,7 +220,7 @@ export default function AccueilView({
                     </div>
                   </div>
                   {membresEquipe.find(m => m.id === user.uid)?.isCoach && (
-                    <div className="relative z-20">
+                    <div className="relative">
                       <button
                         onClick={() => setOpenMenuId(openMenuId === membre.id ? null : membre.id)}
                         className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
@@ -226,7 +228,7 @@ export default function AccueilView({
                         <MoreVertical size={20} />
                       </button>
                       {openMenuId === membre.id && (
-                        <div className="absolute right-0 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden py-1">
+                        <div className="absolute right-0 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden py-1 z-50">
                           <button
                             onClick={() => handleOpenCoachStats(membre)}
                             className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-blue-50"
