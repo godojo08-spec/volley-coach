@@ -1124,6 +1124,10 @@ function App() {
               handleBan={handleBan}
               handleUnban={handleUnban}
               bannisEquipe={bannisEquipe}
+              handleLeaveEquipe={handleLeaveEquipe}
+              handleRenameEquipe={handleRenameEquipe}
+              handleClearEquipePlayers={handleClearEquipePlayers}
+              handleDeleteEquipe={handleDeleteEquipe}
               setCreateType={setCreateType}
               setSelectedStructureIdForNewTeam={setSelectedStructureIdForNewTeam}
               setShowCreateModal={setShowCreateModal}

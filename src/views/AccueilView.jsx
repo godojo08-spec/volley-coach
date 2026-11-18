@@ -1,4 +1,5 @@
-import { UserPlus, ChevronRight, Plus, MoreVertical } from 'lucide-react';
+import { useState } from 'react';
+import { UserPlus, ChevronRight, Plus, MoreVertical, LogOut, X } from 'lucide-react';
 
 export default function AccueilView({
   currentView,
@@ -28,10 +29,27 @@ export default function AccueilView({
   setOnboardingMembreId,
   setOnboardingStats,
   setShowOnboardingModal,
-  handleBan, 
-  handleUnban, 
-  bannisEquipe
+  handleBan,
+  handleUnban,
+  bannisEquipe,
+  handleLeaveEquipe,
+  handleRenameEquipe,
+  handleClearEquipePlayers,
+  handleDeleteEquipe
 }) {
+  const [renamingEquipe, setRenamingEquipe] = useState(null);
+  const [newTeamName, setNewTeamName] = useState('');
+
+  const monLienDansEquipe = membresEquipe.find(m => m.id === user.uid);
+
+  const submitRename = async e => {
+    e.preventDefault();
+    if (!renamingEquipe || !newTeamName.trim()) return;
+    await handleRenameEquipe(renamingEquipe.id, newTeamName);
+    setRenamingEquipe(null);
+    setNewTeamName('');
+  };
+
   return (
     <div className="animate-fade-in p-4 relative min-h-screen">
       {currentView === 'main' && (
@@ -115,8 +133,15 @@ export default function AccueilView({
       )}
 
       {currentView === 'detail_structure' && selectedStructure && (
-        <div className="animate-fade-in">
-          <button onClick={() => setCurrentView('main')} className="text-blue-600 text-sm font-bold mb-4 flex items-center">
+        <div className="animate-fade-in relative">
+          {openMenuId && <div className="fixed inset-0 z-20" onClick={() => setOpenMenuId(null)}></div>}
+          <button
+            onClick={() => {
+              setOpenMenuId(null);
+              setCurrentView('main');
+            }}
+            className="text-blue-600 text-sm font-bold mb-4 flex items-center"
+          >
             ← Retour
           </button>
           <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 rounded-xl shadow-md text-white mb-6">
@@ -126,16 +151,63 @@ export default function AccueilView({
             <h3 className="font-bold text-gray-800 text-lg">Équipes</h3>
           </div>
           <div className="space-y-3">
-            {equipesStructure.map(eq => (
-              <div
-                key={eq.id}
-                onClick={() => handleOpenEquipe(eq)}
-                className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center cursor-pointer"
-              >
-                <p className="font-bold text-gray-800 text-lg">{eq.nom}</p>
-                <ChevronRight className="text-gray-400" />
-              </div>
-            ))}
+            {equipesStructure.map(eq => {
+              const canManageTeam = selectedStructure.isCoach || mesEquipes.find(e => e.id === eq.id)?.isCoach;
+              return (
+                <div
+                  key={eq.id}
+                  onClick={() => handleOpenEquipe(eq)}
+                  className={`bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center cursor-pointer relative ${
+                    openMenuId === eq.id ? 'z-40' : 'z-10'
+                  }`}
+                >
+                  <p className="font-bold text-gray-800 text-lg">{eq.nom}</p>
+                  <div className="flex items-center gap-1">
+                    {canManageTeam && (
+                      <div className="relative" onClick={e => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => setOpenMenuId(openMenuId === eq.id ? null : eq.id)}
+                          className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
+                        >
+                          <MoreVertical size={20} />
+                        </button>
+                        {openMenuId === eq.id && (
+                          <div className="absolute right-0 top-10 w-56 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden py-1 z-50">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                setRenamingEquipe(eq);
+                                setNewTeamName(eq.nom);
+                              }}
+                              className="w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-blue-50"
+                            >
+                              ✏️ Renommer l'équipe
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearEquipePlayers(eq)}
+                              className="w-full text-left px-4 py-3 text-sm text-orange-600 hover:bg-orange-50 border-b border-gray-100"
+                            >
+                              🧹 Supprimer tous les joueurs
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteEquipe(eq)}
+                              className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 font-bold"
+                            >
+                              🗑️ Supprimer l'équipe
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <ChevronRight className="text-gray-400" />
+                  </div>
+                </div>
+              );
+            })}
           </div>
           {equipesStructure.length === 0 && (
             <p className="text-sm text-gray-500 italic mt-4 bg-white p-4 rounded-xl text-center">
@@ -149,7 +221,13 @@ export default function AccueilView({
       {currentView === 'detail_equipe' && selectedEquipe && (
         <div className="animate-fade-in relative">
           {openMenuId && <div className="fixed inset-0 z-20" onClick={() => setOpenMenuId(null)}></div>}
-          <button onClick={() => setCurrentView('main')} className="text-blue-600 text-sm font-bold mb-4">
+          <button
+            onClick={() => {
+              setOpenMenuId(null);
+              setCurrentView('main');
+            }}
+            className="text-blue-600 text-sm font-bold mb-4"
+          >
             ← Retour
           </button>
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-6 border-l-4 border-l-blue-500">
@@ -173,13 +251,12 @@ export default function AccueilView({
           </div>
           <div className="flex justify-between items-center mb-3">
             <h3 className="font-bold text-gray-800 text-lg">Effectif</h3>
-            {membresEquipe.find(m => m.id === user.uid)?.isCoach && !membresEquipe.find(m => m.id === user.uid)?.isJoueur && (
+            {monLienDansEquipe?.isCoach && !monLienDansEquipe?.isJoueur && (
               <button
                 onClick={() => {
-                  const monLien = membresEquipe.find(m => m.id === user.uid);
-                  setOnboardingMembreId(monLien.membreDocId);
+                  setOnboardingMembreId(monLienDansEquipe.membreDocId);
                   setOnboardingStats({
-                    poste1: monLien.posteEquipe || 'Polyvalent',
+                    poste1: monLienDansEquipe.posteEquipe || 'Polyvalent',
                     poste2: 'Polyvalent',
                     attaque: 5,
                     reception: 5,
@@ -212,14 +289,14 @@ export default function AccueilView({
                     </p>
                     <div className="flex items-center gap-2 mt-0.5">
                       <p className="text-xs text-gray-500">{membre.coachPoste || membre.posteEquipe}</p>
-                      {membresEquipe.find(m => m.id === user.uid)?.isCoach && membre.coachStats && (
+                      {monLienDansEquipe?.isCoach && membre.coachStats && (
                         <span className="text-[10px] bg-indigo-50 text-indigo-600 font-bold px-1.5 py-0.5 rounded border border-indigo-100">
                           Noté coach
                         </span>
                       )}
                     </div>
                   </div>
-                  {membresEquipe.find(m => m.id === user.uid)?.isCoach && (
+                  {monLienDansEquipe?.isCoach && (
                     <div className="relative">
                       <button
                         onClick={() => setOpenMenuId(openMenuId === membre.id ? null : membre.id)}
@@ -268,8 +345,8 @@ export default function AccueilView({
                 </div>
               ))}
           </div>
-          
-          {membresEquipe.find(m => m.id === user.uid)?.isCoach && bannisEquipe?.length > 0 && (
+
+          {monLienDansEquipe?.isCoach && bannisEquipe?.length > 0 && (
             <div className="mt-8 mb-10 bg-red-50 p-4 rounded-xl border border-red-200">
               <h3 className="font-bold text-red-800 text-sm uppercase tracking-wider mb-3">
                 Membres suspendus ({bannisEquipe.length})
@@ -300,6 +377,61 @@ export default function AccueilView({
               </div>
             </div>
           )}
+
+          {/* BOUTON QUITTER L'ÉQUIPE (JOUEUR) */}
+          {monLienDansEquipe?.isJoueur && (
+            <div className="mt-8 pt-6 border-t border-gray-200 mb-6">
+              <button
+                type="button"
+                onClick={handleLeaveEquipe}
+                className="w-full py-3.5 rounded-xl border border-red-200 bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+              >
+                <LogOut size={16} /> Quitter l'équipe
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODALE DE RENOMMAGE D'ÉQUIPE (STRUCTURE) */}
+      {renamingEquipe && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-6 relative animate-fade-in">
+            <button
+              type="button"
+              onClick={() => setRenamingEquipe(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            >
+              <X size={20} />
+            </button>
+            <h3 className="text-lg font-bold text-gray-800 mb-4">Renommer l'équipe</h3>
+            <form onSubmit={submitRename} className="space-y-4">
+              <input
+                type="text"
+                value={newTeamName}
+                onChange={e => setNewTeamName(e.target.value)}
+                placeholder="Nouveau nom de l'équipe..."
+                className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm font-bold focus:border-blue-500 outline-none"
+                required
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRenamingEquipe(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold text-sm hover:bg-gray-200"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
