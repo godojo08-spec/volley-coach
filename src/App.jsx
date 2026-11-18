@@ -425,6 +425,7 @@ function App() {
   };
 
   const handleOpenStructure = async struct => {
+    setOpenMenuId(null);
     setSelectedStructure(struct);
     setCurrentView('detail_structure');
     try {
@@ -662,6 +663,119 @@ function App() {
         handleOpenEquipe(selectedEquipe);
       } catch (err) {
         console.error(err);
+      }
+    }
+  };
+
+  const handleLeaveEquipe = async () => {
+    const monLien = membresEquipe.find(m => m.id === user.uid);
+    if (!monLien || !monLien.isJoueur) return;
+
+    if (monLien.isCoach) {
+      if (
+        window.confirm(
+          `Tu es également coach de "${selectedEquipe.nom}". Veux-tu te retirer uniquement de l'effectif joueur (tu conserveras ton accès coach) ?`
+        )
+      ) {
+        try {
+          await updateDoc(doc(db, 'membres', monLien.membreDocId), { isJoueur: false });
+          await fetchMesDonnees(user.uid);
+          await handleOpenEquipe(selectedEquipe);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    } else {
+      if (window.confirm(`Es-tu sûr de vouloir quitter l'équipe "${selectedEquipe.nom}" ?`)) {
+        try {
+          await deleteDoc(doc(db, 'membres', monLien.membreDocId));
+          await fetchMesDonnees(user.uid);
+          setSelectedEquipe(null);
+          setCurrentView('main');
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+  };
+
+  const handleRenameEquipe = async (equipeId, nouveauNom) => {
+    const nomPropre = nouveauNom.trim();
+    if (!nomPropre) return;
+    try {
+      await updateDoc(doc(db, 'equipes', equipeId), { nom: nomPropre });
+      await fetchMesDonnees(user.uid);
+      if (selectedStructure) {
+        await handleOpenStructure(selectedStructure);
+      }
+    } catch (err) {
+      console.error('Erreur renommage équipe :', err);
+    }
+  };
+
+  const handleClearEquipePlayers = async equipe => {
+    if (
+      window.confirm(
+        `Sûr de vouloir supprimer TOUS les joueurs de l'équipe "${equipe.nom}" ?\n(Les coachs conserveront leur accès à l'équipe.)`
+      )
+    ) {
+      try {
+        const qMembres = query(collection(db, 'membres'), where('cibleId', '==', equipe.id), where('type', '==', 'equipe'));
+        const snap = await getDocs(qMembres);
+
+        for (const d of snap.docs) {
+          const lien = d.data();
+          const isCoach = lien.isCoach ?? lien.role === 'coach';
+          const isJoueur = lien.isJoueur ?? lien.role === 'joueur';
+
+          if (isJoueur) {
+            if (isCoach) {
+              await updateDoc(doc(db, 'membres', d.id), { isJoueur: false });
+            } else {
+              await deleteDoc(doc(db, 'membres', d.id));
+            }
+          }
+        }
+
+        setOpenMenuId(null);
+        await fetchMesDonnees(user.uid);
+        if (selectedStructure) {
+          await handleOpenStructure(selectedStructure);
+        }
+        alert(`✅ Tous les joueurs ont été retirés de "${equipe.nom}".`);
+      } catch (err) {
+        console.error('Erreur suppression des joueurs :', err);
+      }
+    }
+  };
+
+  const handleDeleteEquipe = async equipe => {
+    if (
+      window.confirm(
+        `⚠️ Supprimer définitivement l'équipe "${equipe.nom}" ?\nTous les membres et suspensions liés à cette équipe seront supprimés. Cette action est irréversible.`
+      )
+    ) {
+      try {
+        // 1. Supprimer tous les liens membres de l'équipe
+        const qMembres = query(collection(db, 'membres'), where('cibleId', '==', equipe.id), where('type', '==', 'equipe'));
+        const snapMembres = await getDocs(qMembres);
+        await Promise.all(snapMembres.docs.map(d => deleteDoc(doc(db, 'membres', d.id))));
+
+        // 2. Supprimer les éventuels bannissements de l'équipe
+        const qBans = query(collection(db, 'bannissements'), where('equipeId', '==', equipe.id));
+        const snapBans = await getDocs(qBans);
+        await Promise.all(snapBans.docs.map(d => deleteDoc(doc(db, 'bannissements', d.id))));
+
+        // 3. Supprimer le document de l'équipe
+        await deleteDoc(doc(db, 'equipes', equipe.id));
+
+        setOpenMenuId(null);
+        await fetchMesDonnees(user.uid);
+        if (selectedStructure) {
+          await handleOpenStructure(selectedStructure);
+        }
+      } catch (err) {
+        console.error('Erreur suppression équipe :', err);
       }
     }
   };
