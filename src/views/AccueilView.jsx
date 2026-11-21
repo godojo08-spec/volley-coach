@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserPlus, ChevronRight, Plus, MoreVertical, LogOut, X } from 'lucide-react';
+import { UserPlus, ChevronRight, Plus, MoreVertical, LogOut, X, Link2, Check, Lock, Unlock } from 'lucide-react';
 
 export default function AccueilView({
   currentView,
@@ -26,7 +26,6 @@ export default function AccueilView({
   setCreateType,
   setSelectedStructureIdForNewTeam,
   setShowCreateModal,
-  setOnboardingMembreId,
   setOnboardingStats,
   setShowOnboardingModal,
   handleBan,
@@ -35,12 +34,29 @@ export default function AccueilView({
   handleLeaveEquipe,
   handleRenameEquipe,
   handleClearEquipePlayers,
-  handleDeleteEquipe
+  handleDeleteEquipe,
+  demandesEquipe,
+  handleToggleEquipeAccess,
+  handleAcceptDemande,
+  handleRejectDemande,
+  setPendingJoinEquipe
 }) {
   const [renamingEquipe, setRenamingEquipe] = useState(null);
   const [newTeamName, setNewTeamName] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const monLienDansEquipe = membresEquipe.find(m => m.id === user.uid);
+
+  /**
+   * Génère et copie dans le presse-papier le lien direct d'invitation à l'équipe.
+   */
+  const handleCopyInviteLink = () => {
+    if (!selectedEquipe) return;
+    const inviteUrl = `${window.location.origin}/?join=${selectedEquipe.id}`;
+    navigator.clipboard.writeText(inviteUrl);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 3000);
+  };
 
   const submitRename = async e => {
     e.preventDefault();
@@ -78,7 +94,11 @@ export default function AccueilView({
               </button>
             </form>
           </div>
-          {messageRejoindre && <p className="text-xs font-bold text-center mb-4 text-indigo-600">{messageRejoindre}</p>}
+          {messageRejoindre && (
+            <p className="text-xs font-bold text-center mb-4 text-indigo-700 bg-indigo-50 border border-indigo-100 p-2.5 rounded-xl">
+              {messageRejoindre}
+            </p>
+          )}
           {mesStructures.length > 0 && (
             <div className="mb-6">
               <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Structures (Espace Coach)</h2>
@@ -230,13 +250,114 @@ export default function AccueilView({
           >
             ← Retour
           </button>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-6 border-l-4 border-l-blue-500">
+
+          {/* EN-TÊTE DE L'ÉQUIPE + PARTAGE DE LIEN & MODE D'ACCÈS */}
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 mb-6 border-l-4 border-l-blue-500">
             <h2 className="text-2xl font-bold text-gray-800">{selectedEquipe.nom}</h2>
             <p className="text-xs text-gray-500 mt-1">
               Code d'invitation :{' '}
-              <span className="font-mono bg-gray-100 px-1 py-0.5 rounded select-all font-bold">{selectedEquipe.id}</span>
+              <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded select-all font-bold">{selectedEquipe.id}</span>
             </p>
+
+            {/* Zone de partage du lien + choix "À tous / Demande d'accès" pour le coach */}
+            <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyInviteLink}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs transition-colors"
+              >
+                {linkCopied ? (
+                  <>
+                    <Check size={14} className="text-green-600" />
+                    <span className="text-green-700">Lien copié !</span>
+                  </>
+                ) : (
+                  <>
+                    <Link2 size={14} />
+                    <span>Partager le lien</span>
+                  </>
+                )}
+              </button>
+
+              {monLienDansEquipe?.isCoach ? (
+                <button
+                  type="button"
+                  onClick={handleToggleEquipeAccess}
+                  title="Clique pour changer le mode d'entrée dans l'équipe"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs border transition-colors ${
+                    selectedEquipe.accesControle
+                      ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                      : 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                  }`}
+                >
+                  {selectedEquipe.accesControle ? (
+                    <>
+                      <Lock size={13} />
+                      <span>Sur demande d'accès</span>
+                    </>
+                  ) : (
+                    <>
+                      <Unlock size={13} />
+                      <span>Ouvert à tous</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <span className="text-[11px] text-gray-400 font-medium">
+                  {selectedEquipe.accesControle ? '🔒 Sur validation du coach' : '🔓 Entrée libre'}
+                </span>
+              )}
+            </div>
           </div>
+
+          {/* BLOC DEMANDES D'ADHÉSION EN ATTENTE (VISIBLE UNIQUEMENT PAR LE COACH) */}
+          {monLienDansEquipe?.isCoach && demandesEquipe?.length > 0 && (
+            <div className="mb-8 bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm">
+              <h3 className="font-bold text-amber-900 text-sm uppercase tracking-wider mb-3 flex items-center gap-2">
+                ⏳ Demandes d'accès en attente ({demandesEquipe.length})
+              </h3>
+              <div className="space-y-2.5">
+                {demandesEquipe.map(demande => (
+                  <div
+                    key={demande.id}
+                    className="bg-white p-3.5 rounded-xl border border-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm">
+                        {demande.prenom} {demande.nom}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Poste 1 : <span className="font-medium text-gray-700">{demande.poste1}</span>
+                        {demande.poste2 && demande.poste2 !== 'Polyvalent' && (
+                          <>
+                            {' '}
+                            • Poste 2 : <span className="font-medium text-gray-700">{demande.poste2}</span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptDemande(demande)}
+                        className="flex-1 sm:flex-initial px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold text-xs transition-colors"
+                      >
+                        ✅ Accepter
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRejectDemande(demande.id)}
+                        className="flex-1 sm:flex-initial px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs transition-colors"
+                      >
+                        ❌ Refuser
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <h3 className="font-bold text-gray-800 text-lg mb-3 flex items-center gap-2">Staff & Coachs</h3>
           <div className="space-y-3 mb-8">
             {membresEquipe
@@ -249,12 +370,19 @@ export default function AccueilView({
                 </div>
               ))}
           </div>
+
           <div className="flex justify-between items-center mb-3">
             <h3 className="font-bold text-gray-800 text-lg">Effectif</h3>
             {monLienDansEquipe?.isCoach && !monLienDansEquipe?.isJoueur && (
               <button
                 onClick={() => {
-                  setOnboardingMembreId(monLienDansEquipe.membreDocId);
+                  setPendingJoinEquipe({
+                    id: selectedEquipe.id,
+                    nom: selectedEquipe.nom,
+                    accesControle: false,
+                    isSelfCoachJoin: true,
+                    membreDocId: monLienDansEquipe.membreDocId
+                  });
                   setOnboardingStats({
                     poste1: monLienDansEquipe.posteEquipe || 'Polyvalent',
                     poste2: 'Polyvalent',
@@ -273,6 +401,7 @@ export default function AccueilView({
               </button>
             )}
           </div>
+
           <div className="space-y-3 mb-10">
             {membresEquipe
               .filter(m => m.isJoueur)

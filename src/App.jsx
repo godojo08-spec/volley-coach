@@ -82,6 +82,13 @@ function App() {
     defense: 5,
     service: 5
   });
+  // États pour la création de profil obligatoire à la première connexion
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
+
+  // États pour la gestion des invitations par lien et demandes d'adhésion
+  const [pendingJoinEquipe, setPendingJoinEquipe] = useState(null);
+  const [demandesEquipe, setDemandesEquipe] = useState([]);
 
   const [openMenuId, setOpenMenuId] = useState(null);
   const [showCoachStatsModal, setShowCoachStatsModal] = useState(false);
@@ -122,19 +129,60 @@ function App() {
     { key: 'service', label: 'Service ☄️' }
   ];
 
+  /**
+   * Détecte au chargement de la page si l'utilisateur a ouvert un lien d'invitation
+   * du type "?join=ID_EQUIPE" et le sauvegarde en mémoire locale le temps qu'il se connecte.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinEquipeId = params.get('join');
+    if (joinEquipeId) {
+      localStorage.setItem('pendingInviteEquipeId', joinEquipeId.trim());
+      // Nettoie l'URL dans la barre d'adresse pour éviter de relancer l'invitation au rafraîchissement
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  /**
+   * Surveille l'état de connexion Firebase Auth.
+   * Vérifie si la fiche profil (Prénom + Nom) est complète ; sinon, force l'écran de création de profil.
+   */
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async currentUser => {
       setUser(currentUser);
       if (currentUser) {
-        const docSnap = await getDoc(doc(db, 'utilisateurs', currentUser.uid));
-        if (docSnap.exists()) {
-          setNom(docSnap.data().nom || '');
-          setPrenom(docSnap.data().prenom || '');
-          setPoste(docSnap.data().poste || '');
-          setPhotoUrl(docSnap.data().photoURL || '');
+        setProfileLoading(true);
+        try {
+          const docSnap = await getDoc(doc(db, 'utilisateurs', currentUser.uid));
+          const data = docSnap.exists() ? docSnap.data() : {};
+
+          // Le profil est considéré comme complet uniquement si prénom et nom sont renseignés
+          if (docSnap.exists() && data.prenom?.trim() && data.nom?.trim()) {
+            setNom(data.nom);
+            setPrenom(data.prenom);
+            setPoste(data.poste || 'Réceptionneur-Attaquant (R4)');
+            setPhotoUrl(data.photoURL || currentUser.photoURL || '');
+            setNeedsProfileSetup(false);
+          } else {
+            // Première inscription (Email ou Google) : pré-remplissage depuis Google si disponible
+            const parts = (currentUser.displayName || '').trim().split(' ');
+            const googlePrenom = parts[0] || '';
+            const googleNom = parts.slice(1).join(' ') || '';
+
+            setPrenom(data.prenom || googlePrenom);
+            setNom(data.nom || googleNom);
+            setPoste(data.poste || 'Réceptionneur-Attaquant (R4)');
+            setPhotoUrl(data.photoURL || currentUser.photoURL || '');
+            setNeedsProfileSetup(true);
+          }
+
+          await fetchMesDonnees(currentUser.uid);
+          await fetchCompositions(currentUser.uid);
+        } catch (err) {
+          console.error('Erreur chargement profil :', err);
+        } finally {
+          setProfileLoading(false);
         }
-        fetchMesDonnees(currentUser.uid);
-        fetchCompositions(currentUser.uid)
       } else {
         setNom('');
         setPrenom('');
@@ -145,10 +193,51 @@ function App() {
         setSelectedStructure(null);
         setSelectedEquipe(null);
         setCompositionsSauvegardees([]);
+        setNeedsProfileSetup(false);
+        setProfileLoading(false);
       }
     });
     return () => unsubscribe();
   }, []);
+
+  /**
+   * Déclenche automatiquement l'ouverture de la modale d'inscription à une équipe
+   * dès que l'utilisateur est connecté et que son profil obligatoire est complété.
+   */
+  useEffect(() => {
+    if (user && !profileLoading && !needsProfileSetup) {
+      const pendingInviteId = localStorage.getItem('pendingInviteEquipeId');
+      if (pendingInviteId) {
+        localStorage.removeItem('pendingInviteEquipeId');
+        startJoinEquipeProcess(pendingInviteId);
+      }
+    }
+  }, [user, profileLoading, needsProfileSetup]);
+
+  /**
+   * Enregistre les informations obligatoires (Prénom, Nom, Poste) lors de la première connexion
+   * et débloque l'accès à l'application.
+   */
+  const handleCompleteInitialProfile = async e => {
+    e.preventDefault();
+    if (!prenom.trim() || !nom.trim()) return;
+    try {
+      await setDoc(
+        doc(db, 'utilisateurs', user.uid),
+        {
+          prenom: prenom.trim(),
+          nom: nom.trim(),
+          poste,
+          email: user.email,
+          photoURL: photoUrl || ''
+        },
+        { merge: true }
+      );
+      setNeedsProfileSetup(false);
+    } catch (err) {
+      console.error('Erreur création profil initial :', err);
+    }
+  };
 
   const fetchMesDonnees = async uid => {
     try {
@@ -495,23 +584,36 @@ function App() {
         }
       }
       setBannisEquipe(bannisActifs);
+      // Chargement des demandes d'adhésion en attente pour cette équipe (visible par le coach)
+      const qDemandes = query(collection(db, 'demandes_adhesion'), where('equipeId', '==', equipe.id));
+      const snapDemandes = await getDocs(qDemandes);
+      const demandesList = snapDemandes.docs
+        .map(docD => ({ id: docD.id, ...docD.data() }))
+        .sort((a, b) => new Date(a.dateDemande) - new Date(b.dateDemande));
+      setDemandesEquipe(demandesList);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleJoinEquipe = async e => {
-    e.preventDefault();
+  /**
+   * Lance le processus pour rejoindre une équipe (appelé soit via le formulaire de code,
+   * soit automatiquement via un lien d'invitation "?join=ID_EQUIPE").
+   * Vérifie l'existence de l'équipe, les bannissements, et les doublons avant d'ouvrir la modale sportive.
+   */
+  const startJoinEquipeProcess = async rawEquipeId => {
     setMessageRejoindre('');
     try {
-      const codeNettoye = codeInvitation.trim();
+      const codeNettoye = rawEquipeId.trim();
+      if (!codeNettoye) return;
+
       const eqSnap = await getDoc(doc(db, 'equipes', codeNettoye));
       if (!eqSnap.exists()) {
-        setMessageRejoindre('❌ Code invalide.');
+        setMessageRejoindre('❌ Code ou lien d\'invitation invalide.');
         return;
       }
 
-      // Vérification si l'utilisateur est banni de cette équipe
+      // 1. Vérification si l'utilisateur est suspendu de cette équipe
       const qBans = query(collection(db, 'bannissements'), where('equipeId', '==', codeNettoye));
       const snapBans = await getDocs(qBans);
       const maintenant = new Date();
@@ -533,7 +635,7 @@ function App() {
         return;
       }
 
-      // Vérification si déjà dans l'équipe
+      // 2. Vérification si déjà membre de l'équipe
       const qExist = query(
         collection(db, 'membres'),
         where('cibleId', '==', codeNettoye),
@@ -545,14 +647,26 @@ function App() {
         return;
       }
 
-      const newMembreRef = await addDoc(collection(db, 'membres'), {
-        utilisateurId: user.uid,
-        cibleId: codeNettoye,
-        type: 'equipe',
-        isCoach: false,
-        isJoueur: true
+      // 3. Vérification si une demande d'adhésion est déjà en attente de validation
+      const qDemandeExist = query(
+        collection(db, 'demandes_adhesion'),
+        where('equipeId', '==', codeNettoye),
+        where('utilisateurId', '==', user.uid)
+      );
+      const demandeExistSnap = await getDocs(qDemandeExist);
+      if (!demandeExistSnap.empty) {
+        setMessageRejoindre('⏳ Ta demande pour rejoindre cette équipe est déjà en attente de validation par le coach.');
+        return;
+      }
+
+      // 4. Prépare la modale de profil sportif (2 postes + stats) pour cette équipe
+      const eqData = eqSnap.data();
+      setPendingJoinEquipe({
+        id: eqSnap.id,
+        nom: eqData.nom,
+        accesControle: Boolean(eqData.accesControle),
+        isSelfCoachJoin: false
       });
-      setOnboardingMembreId(newMembreRef.id);
       setOnboardingStats({
         poste1: poste || 'Polyvalent',
         poste2: 'Polyvalent',
@@ -566,41 +680,160 @@ function App() {
       setShowOnboardingModal(true);
       setCodeInvitation('');
     } catch (err) {
-      setMessageRejoindre('❌ Erreur lors de la tentative de connexion.');
+      console.error(err);
+      setMessageRejoindre('❌ Erreur lors de la tentative de connexion à l\'équipe.');
     }
   };
 
+  /**
+   * Soumission du formulaire "Rejoindre une équipe" depuis l'accueil.
+   */
+  const handleJoinEquipe = async e => {
+    e.preventDefault();
+    await startJoinEquipeProcess(codeInvitation);
+  };
+
+  /**
+   * Enregistre les 2 postes et les stats du joueur après validation de la modale :
+   * - Si c'est un coach qui s'ajoute comme joueur : met à jour sa fiche membre.
+   * - Si l'équipe est sur validation (accesControle) : crée une demande dans "demandes_adhesion".
+   * - Si l'équipe est en entrée libre : ajoute directement le joueur dans "membres".
+   */
   const handleSaveOnboarding = async e => {
     e.preventDefault();
     try {
-      await setDoc(
-        doc(db, 'membres', onboardingMembreId),
-        {
+      const statsObjet = {
+        attaque: onboardingStats.attaque,
+        reception: onboardingStats.reception,
+        passe: onboardingStats.passe,
+        bloc: onboardingStats.bloc,
+        defense: onboardingStats.defense,
+        service: onboardingStats.service
+      };
+
+      if (pendingJoinEquipe?.isSelfCoachJoin) {
+        // Cas 1 : Le coach s'ajoute lui-même comme joueur dans son équipe
+        await setDoc(
+          doc(db, 'membres', pendingJoinEquipe.membreDocId),
+          {
+            isJoueur: true,
+            poste1: onboardingStats.poste1,
+            poste2: onboardingStats.poste2,
+            stats: statsObjet
+          },
+          { merge: true }
+        );
+      } else if (pendingJoinEquipe?.accesControle) {
+        // Cas 2 : L'équipe demande une validation du coach -> enregistrement dans "demandes_adhesion"
+        await addDoc(collection(db, 'demandes_adhesion'), {
+          equipeId: pendingJoinEquipe.id,
+          equipeNom: pendingJoinEquipe.nom,
+          utilisateurId: user.uid,
+          prenom: prenom || 'Joueur',
+          nom: nom || '',
+          email: user.email || '',
+          photoURL: photoUrl || '',
+          poste1: onboardingStats.poste1,
+          poste2: onboardingStats.poste2,
+          stats: statsObjet,
+          dateDemande: new Date().toISOString()
+        });
+        setMessageRejoindre(`⏳ Demande envoyée ! Le coach de "${pendingJoinEquipe.nom}" doit valider ton entrée.`);
+      } else if (pendingJoinEquipe?.id) {
+        // Cas 3 : Entrée libre -> ajout immédiat dans l'effectif ("membres")
+        await addDoc(collection(db, 'membres'), {
+          utilisateurId: user.uid,
+          cibleId: pendingJoinEquipe.id,
+          type: 'equipe',
+          isCoach: false,
           isJoueur: true,
           poste1: onboardingStats.poste1,
           poste2: onboardingStats.poste2,
-          stats: {
-            attaque: onboardingStats.attaque,
-            reception: onboardingStats.reception,
-            passe: onboardingStats.passe,
-            bloc: onboardingStats.bloc,
-            defense: onboardingStats.defense,
-            service: onboardingStats.service
-          }
-        },
-        { merge: true }
-      );
+          stats: statsObjet
+        });
+        setMessageRejoindre(`✅ Tu as rejoint l'équipe "${pendingJoinEquipe.nom}" !`);
+      }
+
+      // Met à jour le poste principal par défaut sur le profil utilisateur
       await setDoc(
         doc(db, 'utilisateurs', user.uid),
         { email: user.email, nom: nom || '', prenom: prenom || '', poste: onboardingStats.poste1 },
         { merge: true }
       );
+
       setPoste(onboardingStats.poste1);
       setShowOnboardingModal(false);
-      fetchMesDonnees(user.uid);
-      if (selectedEquipe) handleOpenEquipe(selectedEquipe);
+      setPendingJoinEquipe(null);
+      await fetchMesDonnees(user.uid);
+      if (selectedEquipe) await handleOpenEquipe(selectedEquipe);
     } catch (err) {
-      console.error(err);
+      console.error('Erreur enregistrement profil sportif :', err);
+    }
+  };
+
+  /**
+   * Permet au coach de basculer le mode d'entrée de son équipe
+   * entre "Entrée libre" (accesControle: false) et "Sur validation" (accesControle: true).
+   */
+  const handleToggleEquipeAccess = async () => {
+    if (!selectedEquipe) return;
+    const nouveauMode = !selectedEquipe.accesControle;
+    try {
+      await updateDoc(doc(db, 'equipes', selectedEquipe.id), {
+        accesControle: nouveauMode
+      });
+      setSelectedEquipe(prev => ({ ...prev, accesControle: nouveauMode }));
+      await fetchMesDonnees(user.uid);
+    } catch (err) {
+      console.error("Erreur changement mode d'accès :", err);
+    }
+  };
+
+  /**
+   * Accepte la demande d'adhésion d'un joueur : l'ajoute à l'effectif ("membres")
+   * avec ses 2 postes et ses stats, puis supprime la demande en attente.
+   */
+  const handleAcceptDemande = async demande => {
+    try {
+      // Vérifie que le joueur n'a pas déjà été ajouté entre-temps
+      const qExist = query(
+        collection(db, 'membres'),
+        where('cibleId', '==', demande.equipeId),
+        where('utilisateurId', '==', demande.utilisateurId)
+      );
+      const existSnap = await getDocs(qExist);
+
+      if (existSnap.empty) {
+        await addDoc(collection(db, 'membres'), {
+          utilisateurId: demande.utilisateurId,
+          cibleId: demande.equipeId,
+          type: 'equipe',
+          isCoach: false,
+          isJoueur: true,
+          poste1: demande.poste1 || 'Polyvalent',
+          poste2: demande.poste2 || 'Polyvalent',
+          stats: demande.stats || { attaque: 5, reception: 5, passe: 5, bloc: 5, defense: 5, service: 5 }
+        });
+      }
+
+      await deleteDoc(doc(db, 'demandes_adhesion', demande.id));
+      await handleOpenEquipe(selectedEquipe);
+    } catch (err) {
+      console.error('Erreur acceptation demande :', err);
+    }
+  };
+
+  /**
+   * Refuse et supprime la demande d'adhésion d'un joueur.
+   */
+  const handleRejectDemande = async demandeId => {
+    if (window.confirm("Refuser cette demande d'adhésion ?")) {
+      try {
+        await deleteDoc(doc(db, 'demandes_adhesion', demandeId));
+        await handleOpenEquipe(selectedEquipe);
+      } catch (err) {
+        console.error('Erreur refus demande :', err);
+      }
     }
   };
 
@@ -1077,6 +1310,95 @@ function App() {
 
   const handleLogout = () => signOut(auth);
 
+  // Écran de chargement pendant la vérification de la fiche profil
+  if (user && profileLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <p className="text-sm font-bold text-gray-500 animate-pulse">Chargement de ton profil...</p>
+      </div>
+    );
+  }
+
+  // Écran obligatoire à la première inscription (Email ou Google) tant que Nom et Prénom ne sont pas saisis
+  if (user && needsProfileSetup) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
+          <div className="text-center mb-6">
+            <span className="text-4xl">🏐</span>
+            <h1 className="text-2xl font-bold text-gray-800 mt-2">Bienvenue sur Volley Coach !</h1>
+            <p className="text-xs text-gray-500 mt-1">
+              Renseigne ton prénom et ton nom pour que tes coachs et coéquipiers puissent t'identifier.
+            </p>
+          </div>
+
+          <form onSubmit={handleCompleteInitialProfile} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                Prénom <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={prenom}
+                onChange={e => setPrenom(e.target.value)}
+                placeholder="Ex : Lucas"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-medium focus:border-blue-500 outline-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                Nom <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={nom}
+                onChange={e => setNom(e.target.value)}
+                placeholder="Ex : Martin"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-medium focus:border-blue-500 outline-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                Poste principal
+              </label>
+              <select
+                value={poste}
+                onChange={e => setPoste(e.target.value)}
+                className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-medium bg-white"
+              >
+                <option value="Passeur (P)">Passeur (P)</option>
+                <option value="Pointu (Pt)">Pointu (Pt)</option>
+                <option value="Réceptionneur-Attaquant (R4)">Réceptionneur-Attaquant (R4)</option>
+                <option value="Central (C)">Central (C)</option>
+                <option value="Libéro (L)">Libéro (L)</option>
+                <option value="Polyvalent">Polyvalent</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all mt-2"
+            >
+              Continuer vers l'application
+            </button>
+          </form>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full mt-4 text-xs text-gray-400 hover:text-gray-600 font-medium underline"
+          >
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (user) {
     const isCoachOfAnyTeam = mesEquipes.some(eq => eq.isCoach);
 
@@ -1134,6 +1456,11 @@ function App() {
               setOnboardingMembreId={setOnboardingMembreId}
               setOnboardingStats={setOnboardingStats}
               setShowOnboardingModal={setShowOnboardingModal}
+              demandesEquipe={demandesEquipe}
+              handleToggleEquipeAccess={handleToggleEquipeAccess}
+              handleAcceptDemande={handleAcceptDemande}
+              handleRejectDemande={handleRejectDemande}
+              setPendingJoinEquipe={setPendingJoinEquipe}
             />
           )}
 
@@ -1198,12 +1525,17 @@ function App() {
 
         {/* Modales globales */}
         <OnboardingModal
-          show={showOnboardingModal}
-          onboardingStats={onboardingStats}
-          setOnboardingStats={setOnboardingStats}
-          handleSaveOnboarding={handleSaveOnboarding}
-          statsFields={statsFields}
-        />
+        show={showOnboardingModal}
+        onClose={() => {
+          setShowOnboardingModal(false);
+          setPendingJoinEquipe(null);
+        }}
+        onboardingStats={onboardingStats}
+        setOnboardingStats={setOnboardingStats}
+        handleSaveOnboarding={handleSaveOnboarding}
+        statsFields={statsFields}
+        pendingJoinEquipe={pendingJoinEquipe}
+      />
 
         <CoachStatsModal
           show={showCoachStatsModal}
