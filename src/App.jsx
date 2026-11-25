@@ -76,7 +76,6 @@ function App() {
   const [selectedStructureIdForNewTeam, setSelectedStructureIdForNewTeam] = useState('');
 
   const [showOnboardingModal, setShowOnboardingModal] = useState(false);
-  const [onboardingMembreId, setOnboardingMembreId] = useState('');
   const [onboardingStats, setOnboardingStats] = useState({
     poste1: 'Réceptionneur-Attaquant (R4)',
     poste2: 'Polyvalent',
@@ -1752,7 +1751,6 @@ function App() {
               setCreateType={setCreateType}
               setSelectedStructureIdForNewTeam={setSelectedStructureIdForNewTeam}
               setShowCreateModal={setShowCreateModal}
-              setOnboardingMembreId={setOnboardingMembreId}
               setOnboardingStats={setOnboardingStats}
               setShowOnboardingModal={setShowOnboardingModal}
               demandesEquipe={demandesEquipe}
