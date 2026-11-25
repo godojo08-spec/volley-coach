@@ -7,7 +7,12 @@ import {
   onAuthStateChanged,
   signOut,
   getAuth,
-  deleteUser
+  deleteUser,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  applyActionCode,
+  verifyPasswordResetCode,
+  confirmPasswordReset
 } from 'firebase/auth';
 import {
   doc,
@@ -90,6 +95,15 @@ function App() {
   const [pendingJoinEquipe, setPendingJoinEquipe] = useState(null);
   const [demandesEquipe, setDemandesEquipe] = useState([]);
 
+  // États pour la validation d'e-mail et la réinitialisation de mot de passe
+  const [needsEmailVerification, setNeedsEmailVerification] = useState(false);
+  const [authInfoMessage, setAuthInfoMessage] = useState('');
+  const [isForgotPasswordMode, setIsForgotPasswordMode] = useState(false);
+  const [resetOobCode, setResetOobCode] = useState(null);
+  const [resetTargetEmail, setResetTargetEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
   const [openMenuId, setOpenMenuId] = useState(null);
   const [showCoachStatsModal, setShowCoachStatsModal] = useState(false);
   const [editingMembre, setEditingMembre] = useState(null);
@@ -130,22 +144,57 @@ function App() {
   ];
 
   /**
-   * Détecte au chargement de la page si l'utilisateur a ouvert un lien d'invitation
-   * du type "?join=ID_EQUIPE" et le sauvegarde en mémoire locale le temps qu'il se connecte.
+   * 1. Analyse les paramètres présents dans l'URL au chargement de la page :
+   * - "?join=ID_EQUIPE" : sauvegarde l'invitation d'équipe le temps de créer/valider le compte.
+   * - "?mode=verifyEmail&oobCode=..." : valide directement l'adresse e-mail via le code reçu.
+   * - "?mode=resetPassword&oobCode=..." : vérifie le lien et ouvre l'écran de double saisie du nouveau mot de passe.
    */
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const joinEquipeId = params.get('join');
+    const mode = params.get('mode');
+    const oobCode = params.get('oobCode');
+
     if (joinEquipeId) {
       localStorage.setItem('pendingInviteEquipeId', joinEquipeId.trim());
-      // Nettoie l'URL dans la barre d'adresse pour éviter de relancer l'invitation au rafraîchissement
       window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    if (mode === 'verifyEmail' && oobCode) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      applyActionCode(auth, oobCode)
+        .then(async () => {
+          if (auth.currentUser) {
+            await auth.currentUser.reload();
+            if (auth.currentUser.emailVerified) {
+              setNeedsEmailVerification(false);
+            }
+          }
+          setAuthInfoMessage('✅ Adresse e-mail validée avec succès !');
+        })
+        .catch(() => {
+          setError('❌ Ce lien de validation est invalide ou a déjà été utilisé.');
+        });
+    }
+
+    if (mode === 'resetPassword' && oobCode) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      verifyPasswordResetCode(auth, oobCode)
+        .then(targetEmail => {
+          setResetTargetEmail(targetEmail);
+          setResetOobCode(oobCode);
+          setError('');
+        })
+        .catch(() => {
+          setError('❌ Ce lien de réinitialisation est invalide ou a expiré. Refais une demande.');
+        });
     }
   }, []);
 
   /**
-   * Surveille l'état de connexion Firebase Auth.
-   * Vérifie si la fiche profil (Prénom + Nom) est complète ; sinon, force l'écran de création de profil.
+   * 2. Surveille l'état de connexion Firebase Auth :
+   * - Si nouveau compte Email/Mot de passe non vérifié : bloque sur l'écran de validation d'e-mail.
+   * - Une fois l'e-mail vérifié (ou si connexion Google) : vérifie que Prénom + Nom sont renseignés.
    */
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async currentUser => {
@@ -155,16 +204,24 @@ function App() {
         try {
           const docSnap = await getDoc(doc(db, 'utilisateurs', currentUser.uid));
           const data = docSnap.exists() ? docSnap.data() : {};
+          const hasCompletedProfile = docSnap.exists() && Boolean(data.prenom?.trim() && data.nom?.trim());
+          const isPasswordProvider = currentUser.providerData.some(p => p.providerId === 'password');
 
-          // Le profil est considéré comme complet uniquement si prénom et nom sont renseignés
-          if (docSnap.exists() && data.prenom?.trim() && data.nom?.trim()) {
+          // Exige la validation d'e-mail pour tout nouveau compte créé par e-mail/mot de passe
+          if (!hasCompletedProfile && isPasswordProvider && !currentUser.emailVerified) {
+            setNeedsEmailVerification(true);
+          } else {
+            setNeedsEmailVerification(false);
+          }
+
+          if (hasCompletedProfile) {
             setNom(data.nom);
             setPrenom(data.prenom);
             setPoste(data.poste || 'Réceptionneur-Attaquant (R4)');
             setPhotoUrl(data.photoURL || currentUser.photoURL || '');
             setNeedsProfileSetup(false);
           } else {
-            // Première inscription (Email ou Google) : pré-remplissage depuis Google si disponible
+            // Pré-remplissage depuis Google si disponible
             const parts = (currentUser.displayName || '').trim().split(' ');
             const googlePrenom = parts[0] || '';
             const googleNom = parts.slice(1).join(' ') || '';
@@ -193,6 +250,7 @@ function App() {
         setSelectedStructure(null);
         setSelectedEquipe(null);
         setCompositionsSauvegardees([]);
+        setNeedsEmailVerification(false);
         setNeedsProfileSetup(false);
         setProfileLoading(false);
       }
@@ -201,18 +259,18 @@ function App() {
   }, []);
 
   /**
-   * Déclenche automatiquement l'ouverture de la modale d'inscription à une équipe
-   * dès que l'utilisateur est connecté et que son profil obligatoire est complété.
+   * 3. Déclenche l'inscription à l'équipe (via lien ?join=...) uniquement lorsque :
+   * l'utilisateur est connecté + e-mail validé + profil (Prénom/Nom) complété.
    */
   useEffect(() => {
-    if (user && !profileLoading && !needsProfileSetup) {
+    if (user && !profileLoading && !needsEmailVerification && !needsProfileSetup) {
       const pendingInviteId = localStorage.getItem('pendingInviteEquipeId');
       if (pendingInviteId) {
         localStorage.removeItem('pendingInviteEquipeId');
         startJoinEquipeProcess(pendingInviteId);
       }
     }
-  }, [user, profileLoading, needsProfileSetup]);
+  }, [user, profileLoading, needsEmailVerification, needsProfileSetup]);
 
   /**
    * Enregistre les informations obligatoires (Prénom, Nom, Poste) lors de la première connexion
@@ -1285,22 +1343,135 @@ function App() {
     }
   };
 
+  /**
+   * Connexion ou création de compte par Email / Mot de passe.
+   * En cas de création de compte, envoie immédiatement l'e-mail de validation.
+   */
   const handleAuth = async e => {
     e.preventDefault();
     setError('');
+    setAuthInfoMessage('');
     try {
       if (isLoginMode) {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await sendEmailVerification(userCredential.user, {
+          url: window.location.origin
+        });
+        setNeedsEmailVerification(true);
+        setAuthInfoMessage(`📩 Un e-mail de confirmation a été envoyé à ${email}.`);
       }
     } catch (err) {
-      setError(err.message || "Erreur d'authentification.");
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Cette adresse e-mail est déjà utilisée. Essaie de te connecter.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Le mot de passe doit contenir au moins 6 caractères.');
+      } else if (err.code === 'auth/invalid-credential') {
+        setError('E-mail ou mot de passe incorrect.');
+      } else {
+        setError(err.message || "Erreur d'authentification.");
+      }
+    }
+  };
+
+  /**
+   * Vérifie auprès de Firebase si l'utilisateur a bien cliqué sur le lien reçu par mail.
+   * Si oui, débloque l'étape suivante (création du profil Prénom / Nom / Poste).
+   */
+  const handleCheckEmailVerified = async () => {
+    setError('');
+    setAuthInfoMessage('');
+    if (!auth.currentUser) return;
+    try {
+      await auth.currentUser.reload();
+      if (auth.currentUser.emailVerified) {
+        setNeedsEmailVerification(false);
+      } else {
+        setError("⏳ Ton adresse n'est pas encore validée. Clique sur le lien dans ton e-mail (pense aux spams) puis réessaie.");
+      }
+    } catch (err) {
+      setError('Erreur lors de la vérification. Réessaie dans un instant.');
+    }
+  };
+
+  /**
+   * Renvoie un nouvel e-mail de confirmation si l'utilisateur ne l'a pas reçu.
+   */
+  const handleResendVerificationEmail = async () => {
+    setError('');
+    setAuthInfoMessage('');
+    if (!auth.currentUser) return;
+    try {
+      await sendEmailVerification(auth.currentUser, {
+        url: window.location.origin
+      });
+      setAuthInfoMessage('✅ Nouvel e-mail de confirmation envoyé ! Vérifie ta boîte de réception et tes spams.');
+    } catch (err) {
+      if (err.code === 'auth/too-many-requests') {
+        setError('Trop de tentatives. Attends une minute avant de renvoyer un e-mail.');
+      } else {
+        setError("Impossible de renvoyer l'e-mail pour le moment.");
+      }
+    }
+  };
+
+  /**
+   * Envoie l'e-mail de réinitialisation de mot de passe depuis la page de connexion.
+   */
+  const handleForgotPasswordSubmit = async e => {
+    e.preventDefault();
+    setError('');
+    setAuthInfoMessage('');
+    if (!email.trim()) {
+      setError('Renseigne ton adresse e-mail.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email.trim(), {
+        url: window.location.origin
+      });
+      setAuthInfoMessage(`✅ Lien de réinitialisation envoyé à ${email.trim()} ! Vérifie ta boîte mail (et tes spams).`);
+    } catch (err) {
+      if (err.code === 'auth/user-not-found') {
+        setError('Aucun compte ne correspond à cette adresse e-mail.');
+      } else {
+        setError("Erreur lors de l'envoi de l'e-mail de réinitialisation.");
+      }
+    }
+  };
+
+  /**
+   * Valide le nouveau mot de passe saisi 2 fois après ouverture du lien reçu par e-mail.
+   */
+  const handleConfirmNewPassword = async e => {
+    e.preventDefault();
+    setError('');
+    if (newPassword.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError('❌ Les deux mots de passe ne sont pas identiques.');
+      return;
+    }
+    try {
+      await confirmPasswordReset(auth, resetOobCode, newPassword);
+      setResetOobCode(null);
+      setNewPassword('');
+      setConfirmNewPassword('');
+      if (resetTargetEmail) setEmail(resetTargetEmail);
+      setIsLoginMode(true);
+      setIsForgotPasswordMode(false);
+      setAuthInfoMessage('✅ Mot de passe modifié avec succès ! Tu peux maintenant te connecter.');
+    } catch (err) {
+      setError('❌ Le lien a expiré ou est invalide. Refais une demande de réinitialisation.');
     }
   };
 
   const handleGoogle = async () => {
     setError('');
+    setAuthInfoMessage('');
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
     } catch (err) {
@@ -1310,11 +1481,139 @@ function App() {
 
   const handleLogout = () => signOut(auth);
 
+  // Écran affiché quand l'utilisateur clique sur le lien de réinitialisation reçu par mail
+  if (resetOobCode) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
+          <div className="text-center mb-6">
+            <span className="text-4xl">🔐</span>
+            <h1 className="text-2xl font-bold text-gray-800 mt-2">Nouveau mot de passe</h1>
+            {resetTargetEmail && (
+              <p className="text-xs text-gray-500 mt-1">
+                Compte : <span className="font-bold text-gray-700">{resetTargetEmail}</span>
+              </p>
+            )}
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-700 text-xs font-bold rounded-lg border border-red-200">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleConfirmNewPassword} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                Nouveau mot de passe <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Minimum 6 caractères"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                Confirmer le mot de passe <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={confirmNewPassword}
+                onChange={e => setConfirmNewPassword(e.target.value)}
+                placeholder="Répète le mot de passe"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all"
+            >
+              Enregistrer le nouveau mot de passe
+            </button>
+          </form>
+
+          <button
+            type="button"
+            onClick={() => {
+              setResetOobCode(null);
+              setError('');
+            }}
+            className="w-full mt-4 text-xs text-gray-400 hover:text-gray-600 font-medium underline"
+          >
+            Retour à la connexion
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Écran de chargement pendant la vérification de la fiche profil
   if (user && profileLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <p className="text-sm font-bold text-gray-500 animate-pulse">Chargement de ton profil...</p>
+      </div>
+    );
+  }
+
+  // Écran bloquant tant que l'adresse e-mail du nouveau compte n'est pas validée
+  if (user && needsEmailVerification) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md text-center animate-fade-in">
+          <span className="text-4xl">📧</span>
+          <h1 className="text-2xl font-bold text-gray-800 mt-3">Valide ton adresse e-mail</h1>
+          <p className="text-xs text-gray-500 mt-2 leading-relaxed">
+            Un lien de confirmation a été envoyé à <span className="font-bold text-gray-800">{user.email}</span>.
+            <br />
+            Clique sur le lien dans ton e-mail puis appuie sur le bouton ci-dessous pour continuer.
+          </p>
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 text-red-700 text-xs font-bold rounded-lg border border-red-200 text-left">
+              {error}
+            </div>
+          )}
+
+          {authInfoMessage && (
+            <div className="mt-4 p-3 bg-green-50 text-green-700 text-xs font-bold rounded-lg border border-green-200 text-left">
+              {authInfoMessage}
+            </div>
+          )}
+
+          <div className="mt-6 space-y-3">
+            <button
+              type="button"
+              onClick={handleCheckEmailVerified}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all"
+            >
+              ✅ J'ai validé mon e-mail
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResendVerificationEmail}
+              className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3 rounded-xl text-xs transition-all"
+            >
+              📩 Renvoyer l'e-mail de confirmation
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full mt-5 text-xs text-gray-400 hover:text-gray-600 font-medium underline"
+          >
+            Se déconnecter / Utiliser une autre adresse
+          </button>
+        </div>
       </div>
     );
   }
@@ -1592,63 +1891,133 @@ function App() {
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
         <h1 className="text-3xl font-bold text-blue-600 text-center mb-6">🏐 Volley Coach</h1>
 
-        {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-xs font-bold rounded-lg border border-red-200">{error}</div>}
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 text-red-700 text-xs font-bold rounded-lg border border-red-200">
+            {error}
+          </div>
+        )}
 
-        <form onSubmit={handleAuth} className="space-y-4">
-          <input
-            type="email"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            placeholder="Email"
-            className="w-full border border-gray-300 rounded-xl px-4 py-3"
-            required
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder="Mot de passe"
-            className="w-full border border-gray-300 rounded-xl px-4 py-3"
-            required
-          />
+        {authInfoMessage && (
+          <div className="mb-4 p-3 bg-green-50 text-green-700 text-xs font-bold rounded-lg border border-green-200">
+            {authInfoMessage}
+          </div>
+        )}
 
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition-all">
-            {isLoginMode ? 'Se connecter' : 'Créer un compte'}
-          </button>
-        </form>
+        {isForgotPasswordMode ? (
+          <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+            <p className="text-xs text-gray-500">
+              Entre l'adresse e-mail associée à ton compte pour recevoir un lien de réinitialisation de mot de passe.
+            </p>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="Ton adresse e-mail"
+              className="w-full border border-gray-300 rounded-xl px-4 py-3"
+              required
+            />
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition-all"
+            >
+              Envoyer le lien de réinitialisation
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsForgotPasswordMode(false);
+                setError('');
+                setAuthInfoMessage('');
+              }}
+              className="w-full text-center text-sm text-indigo-600 font-bold hover:underline pt-1"
+            >
+              ← Retour à la connexion
+            </button>
+          </form>
+        ) : (
+          <>
+            <form onSubmit={handleAuth} className="space-y-4">
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="Email"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3"
+                required
+              />
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Mot de passe"
+                className="w-full border border-gray-300 rounded-xl px-4 py-3"
+                required
+              />
 
-        <div className="mt-4 flex items-center justify-between text-sm">
-          <button type="button" onClick={() => setIsLoginMode(!isLoginMode)} className="text-indigo-600 font-bold hover:underline">
-            {isLoginMode ? "Pas de compte ? S'inscrire" : 'Déjà un compte ? Se connecter'}
-          </button>
-        </div>
+              <button
+                type="submit"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition-all"
+              >
+                {isLoginMode ? 'Se connecter' : 'Créer un compte'}
+              </button>
+            </form>
 
-        <div className="mt-6 border-t pt-4">
-          <button
-            onClick={handleGoogle}
-            className="w-full bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
-            Se connecter avec Google
-          </button>
-        </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLoginMode(!isLoginMode);
+                  setError('');
+                  setAuthInfoMessage('');
+                }}
+                className="text-indigo-600 font-bold hover:underline"
+              >
+                {isLoginMode ? "Pas de compte ? S'inscrire" : 'Déjà un compte ? Se connecter'}
+              </button>
+
+              {isLoginMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPasswordMode(true);
+                    setError('');
+                    setAuthInfoMessage('');
+                  }}
+                  className="text-gray-500 font-semibold hover:text-blue-600 hover:underline text-xs"
+                >
+                  Mot de passe oublié ?
+                </button>
+              )}
+            </div>
+
+            <div className="mt-6 border-t pt-4">
+              <button
+                onClick={handleGoogle}
+                className="w-full bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                  />
+                </svg>
+                Se connecter avec Google
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
